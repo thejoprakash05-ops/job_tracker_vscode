@@ -56,6 +56,15 @@ header {
   font-weight: 700;
   color: var(--primary);
   letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+.logo-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: block;
 }
 .header-sub {
   font-size: .8rem;

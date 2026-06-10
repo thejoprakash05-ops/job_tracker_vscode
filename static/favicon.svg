@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- blue app-icon background -->
+  <rect width="32" height="32" rx="7" fill="#2563eb"/>
+
+  <!-- white document body with folded top-right corner -->
+  <path d="M5,5 L17,5 L21,9 L21,27 Q21,28 20,28 L6,28 Q5,28 5,27 Z" fill="white"/>
+  <!-- fold crease shadow -->
+  <path d="M17,5 L21,9 L17,9 Z" fill="#bfdbfe"/>
+
+  <!-- three text lines representing resume content -->
+  <rect x="8"  y="13" width="10" height="1.5" rx="0.75" fill="#bfdbfe"/>
+  <rect x="8"  y="17" width="8"  height="1.5" rx="0.75" fill="#bfdbfe"/>
+  <rect x="8"  y="21" width="5"  height="1.5" rx="0.75" fill="#dbeafe"/>
+
+  <!-- amber checkmark badge (bottom-right, overlaps document corner) -->
+  <circle cx="24.5" cy="24.5" r="6.5" fill="#1d4ed8"/>
+  <circle cx="24.5" cy="24.5" r="5.5" fill="#f59e0b"/>
+  <path d="M21.5,24.5 L23.5,26.5 L27.5,21.5"
+        stroke="white" stroke-width="1.7"
+        stroke-linecap="round" stroke-linejoin="round"
+        fill="none"/>
+</svg>
