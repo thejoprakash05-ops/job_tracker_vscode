@@ -605,5 +605,112 @@ def download_file(folder: str, filename: str):
     return send_from_directory(d, filename, as_attachment=True)
 
 
+@app.route("/skill-builder")
+def skill_builder():
+    skill = request.args.get("skill", "").strip()
+    return render_template("skill_builder.html", skill=skill)
+
+
+@app.route("/skill-builder/content")
+def skill_builder_content():
+    skill = request.args.get("skill", "").strip()
+    if not skill:
+        return jsonify({"error": "No skill specified"}), 400
+
+    try:
+        client = get_client()
+    except EnvironmentError as e:
+        return jsonify({"error": str(e)}), 500
+
+    skill_q = skill.replace(" ", "+")
+    prompt = (
+        f'You are a professional learning advisor helping someone bridge a career skill gap.\n\n'
+        f'Skill to develop: "{skill}"\n\n'
+        "Generate a comprehensive learning guide as a raw HTML snippet. "
+        "Return ONLY valid HTML — no <html>/<head>/<body>/<style> tags, no markdown fences, no preamble.\n\n"
+        "Use exactly this 4-section structure:\n\n"
+
+        "SECTION 1 — YouTube Videos (4–5 real video or playlist recommendations):\n"
+        '<section class="resource-section">\n'
+        '  <h2 class="section-title"><span class="section-icon">▶</span> YouTube Videos</h2>\n'
+        '  <div class="resource-grid">\n'
+        '    <div class="resource-card youtube-card">\n'
+        '      <div class="card-header"><span class="platform-badge yt-badge">YouTube</span><span class="meta-tag">~X hours</span></div>\n'
+        '      <h3 class="card-title">Video or Playlist Title</h3>\n'
+        '      <p class="card-sub">Channel Name</p>\n'
+        '      <p class="card-desc">What you will learn and why this resource stands out.</p>\n'
+        f'      <a href="https://www.youtube.com/results?search_query={skill_q}+tutorial" class="card-link" target="_blank" rel="noopener">Watch on YouTube →</a>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '</section>\n\n'
+
+        "SECTION 2 — Online Courses (4–5 courses; use real names from Coursera, DeepLearning.ai, edX, Udacity, fast.ai, Pluralsight):\n"
+        '<section class="resource-section">\n'
+        '  <h2 class="section-title"><span class="section-icon">🎓</span> Online Courses</h2>\n'
+        '  <div class="resource-grid">\n'
+        '    <div class="resource-card course-card">\n'
+        '      <div class="card-header"><span class="platform-badge coursera-badge">Coursera</span><span class="meta-tag">Intermediate · 4 weeks</span></div>\n'
+        '      <h3 class="card-title">Exact Course Name</h3>\n'
+        '      <p class="card-sub">Instructor Name · Institution</p>\n'
+        '      <p class="card-desc">What you will learn and why this course is recommended.</p>\n'
+        f'      <a href="https://www.coursera.org/search?query={skill_q}" class="card-link" target="_blank" rel="noopener">View Course →</a>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '</section>\n\n'
+
+        "SECTION 3 — University Courses (3–4 open courseware from top universities: MIT OCW, Stanford, CMU, Berkeley, etc.):\n"
+        '<section class="resource-section">\n'
+        '  <h2 class="section-title"><span class="section-icon">🏛</span> University Courses</h2>\n'
+        '  <div class="resource-grid">\n'
+        '    <div class="resource-card uni-card">\n'
+        '      <div class="card-header"><span class="platform-badge uni-badge">MIT</span><span class="meta-tag">Graduate</span></div>\n'
+        '      <h3 class="card-title">Course Name (Course Number)</h3>\n'
+        '      <p class="card-sub">University Name</p>\n'
+        '      <p class="card-desc">Topics covered and what makes this course rigorous.</p>\n'
+        f'      <a href="https://ocw.mit.edu/search/?q={skill_q}" class="card-link" target="_blank" rel="noopener">Course Page →</a>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '</section>\n\n'
+
+        "SECTION 4 — Mentors & Experts (4–5 real known practitioners or researchers in this field):\n"
+        '<section class="resource-section">\n'
+        '  <h2 class="section-title"><span class="section-icon">👤</span> Mentors &amp; Experts to Connect</h2>\n'
+        '  <div class="resource-grid">\n'
+        '    <div class="resource-card mentor-card">\n'
+        '      <div class="card-header"><span class="platform-badge mentor-badge">Expert</span><span class="meta-tag">Core Expertise</span></div>\n'
+        '      <h3 class="card-title">Full Name</h3>\n'
+        '      <p class="card-sub">Title · Organization</p>\n'
+        '      <p class="card-desc">Why they are a leading voice and what you can learn from following their work.</p>\n'
+        '      <div class="mentor-links">\n'
+        f'        <a href="https://www.linkedin.com/search/results/people/?keywords={skill_q}+expert" class="card-link" target="_blank" rel="noopener">LinkedIn →</a>\n'
+        f'        <a href="https://twitter.com/search?q={skill_q}+expert&amp;f=user" class="card-link card-link-secondary" target="_blank" rel="noopener">Twitter/X →</a>\n'
+        '      </div>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '</section>\n\n'
+
+        "Rules:\n"
+        "- Use real specific titles: actual known course names, real YouTube channels (3Blue1Brown, Andrej Karpathy, Sentdex, etc.)\n"
+        "- For platform-badge: use the actual platform name — Coursera, DeepLearning.ai, edX, Udacity, fast.ai, Pluralsight\n"
+        "- Badge CSS class mapping: Coursera→coursera-badge, DeepLearning.ai→dl-badge, edX→edx-badge, Udacity→udacity-badge, fast.ai→fastai-badge\n"
+        "- For university badge text use abbreviation (MIT, Stanford, CMU, Berkeley, Harvard, Oxford), class=uni-badge\n"
+        "- For links use search-based URLs that always resolve — never invent specific deep links\n"
+        "- Mentors should be real well-known practitioners with their actual title and org\n"
+        "- Return ONLY the HTML. Nothing else."
+    )
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    html_content = resp.content[0].text.strip()
+    html_content = re.sub(r"^```html?\s*", "", html_content)
+    html_content = re.sub(r"\s*```$", "", html_content)
+
+    return jsonify({"html": html_content, "skill": skill})
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000, threaded=True)

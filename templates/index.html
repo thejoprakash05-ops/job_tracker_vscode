@@ -132,7 +132,7 @@
           <div id="matchedSkills" class="tag-list"></div>
         </div>
         <div class="insights-col">
-          <h4 class="insights-heading missing">&#9651; Missing / Gaps</h4>
+          <h4 class="insights-heading missing">&#9651; Missing / Gaps <span class="learn-hint">click to learn</span></h4>
           <div id="missingSkills" class="tag-list"></div>
         </div>
         <div class="insights-col">
@@ -375,7 +375,7 @@ function renderResults(data) {
 
   // Skills tags
   renderTags("matchedSkills", a.matched_skills || [], "tag-green");
-  renderTags("missingSkills", a.missing_skills || [], "tag-orange");
+  renderMissingSkillTags("missingSkills", a.missing_skills || []);
 
   // Lists
   renderList("strengthsList", a.strengths || []);
@@ -454,6 +454,18 @@ function renderTags(containerId, items, cls) {
   const el = document.getElementById(containerId);
   el.innerHTML = items.length
     ? items.map(s => `<span class="tag ${cls}">${escHtml(s)}</span>`).join("")
+    : '<span class="tag tag-none">None identified</span>';
+}
+
+function renderMissingSkillTags(containerId, items) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = items.length
+    ? items.map(s =>
+        `<a href="/skill-builder?skill=${encodeURIComponent(s)}" target="_blank"
+            class="tag tag-orange tag-clickable"
+            title="Find learning resources for: ${escHtml(s)}"
+          >${escHtml(s)}<span class="tag-learn">Learn →</span></a>`
+      ).join("")
     : '<span class="tag tag-none">None identified</span>';
 }
 
