@@ -970,29 +970,57 @@ def _ln_session(li_at: str, jsessionid: str) -> requests.Session:
     return s
 
 
-def _fetch_saved_jobs(li_at: str, jsessionid: str, max_count: int = 200) -> list[dict]:
-    sess  = _ln_session(li_at, jsessionid)
-    jobs  = []
-    start = 0
+# Ordered list of candidate endpoints + their required query params.
+# The first one that returns HTTP 200 is cached in LN_SAVED_JOBS_URL (.env).
+_LN_SAVED_JOBS_CANDIDATES = [
+    (
+        "https://www.linkedin.com/voyager/api/voyagerJobsDashSavedJobs",
+        {"count": 40, "q": "savedJobsByViewer"},
+    ),
+    (
+        "https://www.linkedin.com/voyager/api/myItems/savedJobPostings",
+        {"count": 40},
+    ),
+    (
+        "https://www.linkedin.com/voyager/api/jobs/savedJobPostings",
+        {"count": 40},
+    ),
+    (
+        "https://www.linkedin.com/voyager/api/jobs/jobPostings",
+        {"count": 40, "q": "savedByMember"},
+    ),
+]
 
-    while start < max_count:
-        resp = sess.get(
-            "https://www.linkedin.com/voyager/api/myItems/savedJobPostings",
-            params={"count": 40, "start": start},
-            timeout=20,
-        )
-        if resp.status_code == 401:
-            raise ValueError("LinkedIn authentication failed — check your li_at cookie.")
-        if resp.status_code == 403:
-            raise ValueError("LinkedIn returned 403 — your JSESSIONID (csrf-token) may be wrong.")
-        resp.raise_for_status()
 
-        data     = resp.json()
-        paging   = data.get("paging", {})
-        included = data.get("included", [])
+def _parse_ln_jobs(data: dict) -> tuple[list[dict], int]:
+    """Return (jobs_list, total_count) from either Dash or legacy Voyager response."""
+    jobs = []
 
-        batch = []
-        for item in included:
+    # Dash format: top-level "elements" array
+    for el in data.get("elements", []):
+        job_obj = el.get("job") or el
+        urn = job_obj.get("entityUrn", el.get("entityUrn", ""))
+        m = re.search(r":(\d+)$", urn)
+        if not m:
+            continue
+        job_id  = m.group(1)
+        title   = job_obj.get("title", "Unknown")
+        company = job_obj.get("companyName", "")
+        if not company:
+            cd = job_obj.get("companyDetails", {})
+            if isinstance(cd, dict):
+                c = cd.get("company", {})
+                company = (c.get("name", "") if isinstance(c, dict) else "") or cd.get("companyName", "")
+        jobs.append({
+            "job_id":  job_id,
+            "title":   title,
+            "company": company,
+            "url":     f"https://www.linkedin.com/jobs/view/{job_id}/",
+        })
+
+    if not jobs:
+        # Legacy Voyager format: "included" array
+        for item in data.get("included", []):
             if "JobPosting" not in str(item.get("$type", "")):
                 continue
             m = re.search(r"urn:li:jobPosting:(\d+)", item.get("entityUrn", ""))
@@ -1005,20 +1033,110 @@ def _fetch_saved_jobs(li_at: str, jsessionid: str, max_count: int = 200) -> list
             if isinstance(cd, dict):
                 c = cd.get("company", {})
                 company = (c.get("name", "") if isinstance(c, dict) else "") or cd.get("companyName", "")
-            batch.append({
+            jobs.append({
                 "job_id":  job_id,
                 "title":   title,
                 "company": company,
                 "url":     f"https://www.linkedin.com/jobs/view/{job_id}/",
             })
 
+    total = data.get("paging", {}).get("total", len(jobs))
+    return jobs, total
+
+
+
+def _fetch_saved_jobs(li_at: str, jsessionid: str, max_count: int = 200) -> list[dict]:
+    sess = _ln_session(li_at, jsessionid)
+
+    # Resolve which endpoint to use
+    saved_url   = os.getenv("LN_SAVED_JOBS_URL", "").strip()
+    base_params: dict = {}
+
+    if not saved_url:
+        print("[linkedin] Probing saved-jobs endpoints…")
+        for url, params in _LN_SAVED_JOBS_CANDIDATES:
+            probe = sess.get(url, params={**params, "start": 0}, timeout=15)
+            print(f"[linkedin]   {url} → {probe.status_code}")
+            if probe.status_code == 200:
+                saved_url   = url
+                base_params = params
+                _update_env_file("LN_SAVED_JOBS_URL", url)
+                print(f"[linkedin] Using endpoint: {url}")
+                break
+            if probe.status_code in (401, 403):
+                if probe.status_code == 401:
+                    raise ValueError("LinkedIn authentication failed — check your li_at cookie.")
+                raise ValueError("LinkedIn returned 403 — your JSESSIONID (csrf-token) may be wrong.")
+        if not saved_url:
+            raise ValueError(
+                "All known LinkedIn saved-jobs endpoints returned errors. "
+                "LinkedIn may have updated their internal API. "
+                "Try opening DevTools → Network in Chrome while viewing linkedin.com/my-items/saved-jobs "
+                "to find the working URL, then set LN_SAVED_JOBS_URL=<url> in .env."
+            )
+    else:
+        # Reconstruct base_params for the cached endpoint
+        for url, params in _LN_SAVED_JOBS_CANDIDATES:
+            if url == saved_url:
+                base_params = params
+                break
+        if not base_params:
+            base_params = {"count": 40}
+
+    # Paginate
+    jobs  = []
+    start = 0
+    while start < max_count:
+        resp = sess.get(saved_url, params={**base_params, "start": start}, timeout=20)
+        if resp.status_code == 401:
+            raise ValueError("LinkedIn authentication failed — check your li_at cookie.")
+        if resp.status_code == 403:
+            raise ValueError("LinkedIn returned 403 — your JSESSIONID (csrf-token) may be wrong.")
+        if resp.status_code == 404:
+            # Cached endpoint went stale — clear it and tell user to retry
+            _update_env_file("LN_SAVED_JOBS_URL", "")
+            raise ValueError(
+                "Cached LinkedIn endpoint returned 404 (LinkedIn likely rotated it). "
+                "LN_SAVED_JOBS_URL has been cleared — please retry to auto-detect."
+            )
+        resp.raise_for_status()
+
+        batch, total = _parse_ln_jobs(resp.json())
         jobs.extend(batch)
-        total  = paging.get("total", 0)
         start += 40
         if start >= total or not batch:
             break
 
     return jobs
+
+
+@app.route("/linkedin/probe-endpoints")
+def linkedin_probe_endpoints():
+    """Debug route: tests all known saved-jobs endpoints and returns their HTTP statuses."""
+    li_at      = request.args.get("li_at",      os.getenv("LI_AT",      "")).strip()
+    jsessionid = request.args.get("jsessionid", os.getenv("JSESSIONID", "")).strip()
+    if not li_at or not jsessionid:
+        return jsonify({"error": "li_at and jsessionid required (or set LI_AT/JSESSIONID in .env)"}), 400
+
+    sess    = _ln_session(li_at, jsessionid)
+    results = []
+    for url, params in _LN_SAVED_JOBS_CANDIDATES:
+        try:
+            r = sess.get(url, params={**params, "start": 0}, timeout=15)
+            results.append({
+                "url":     url,
+                "status":  r.status_code,
+                "ok":      r.status_code == 200,
+                "preview": r.text[:400] if r.status_code == 200 else r.text[:200],
+            })
+        except Exception as e:
+            results.append({"url": url, "status": "error", "ok": False, "preview": str(e)})
+
+    working = next((r for r in results if r["ok"]), None)
+    if working:
+        _update_env_file("LN_SAVED_JOBS_URL", working["url"])
+
+    return jsonify({"results": results, "working": working["url"] if working else None})
 
 
 _batch_queues: dict = {}
