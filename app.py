@@ -1,8 +1,12 @@
+import base64
 import io
 import os
 import json
 import queue
 import re
+import shutil
+import sqlite3
+import tempfile
 import threading
 import uuid
 from datetime import datetime
@@ -412,13 +416,142 @@ def safe_folder(company: str, title: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Chrome cookie extraction (Windows DPAPI + AES-GCM)
+# ---------------------------------------------------------------------------
+
+def _dpapi_decrypt(data: bytes) -> bytes:
+    import ctypes, ctypes.wintypes
+    class _BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    buf      = ctypes.create_string_buffer(data, len(data))
+    blob_in  = _BLOB(ctypes.sizeof(buf), buf)
+    blob_out = _BLOB()
+    if not ctypes.windll.crypt32.CryptUnprotectData(
+            ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)):
+        raise RuntimeError("DPAPI decryption failed")
+    result = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+    return result
+
+
+def _chrome_aes_key() -> bytes:
+    local_state_path = (
+        Path(os.environ["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data" / "Local State"
+    )
+    raw = json.loads(local_state_path.read_text(encoding="utf-8"))
+    enc_key = base64.b64decode(raw["os_crypt"]["encrypted_key"])
+    return _dpapi_decrypt(enc_key[5:])  # strip leading b"DPAPI"
+
+
+def _decrypt_cookie_value(key: bytes, enc_val: bytes) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    # v10/v11: 3-byte tag + 12-byte IV + ciphertext+tag
+    return AESGCM(key).decrypt(enc_val[3:15], enc_val[15:], None).decode("utf-8", errors="replace")
+
+
+def _extract_chrome_linkedin_cookies() -> dict:
+    base = Path(os.environ["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data"
+    db_path = None
+    for profile in ("Default", "Profile 1", "Profile 2"):
+        for sub in ("Network", ""):
+            p = base / profile / sub / "Cookies" if sub else base / profile / "Cookies"
+            if p.exists():
+                db_path = p
+                break
+        if db_path:
+            break
+    if not db_path:
+        raise FileNotFoundError("Chrome Cookies database not found. Is Chrome installed?")
+
+    key = _chrome_aes_key()
+
+    # Copy to temp so we don't hit Chrome's file lock
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as _f:
+        tmp = Path(_f.name)
+    shutil.copy2(db_path, tmp)
+    for ext in ("-wal", "-shm"):
+        src = db_path.with_name(db_path.name + ext)
+        if src.exists():
+            shutil.copy2(src, tmp.with_name(tmp.name + ext))
+
+    try:
+        con  = sqlite3.connect(str(tmp))
+        rows = con.execute(
+            "SELECT name, value, encrypted_value FROM cookies "
+            "WHERE host_key LIKE '%linkedin.com' AND name IN ('li_at', 'JSESSIONID')"
+        ).fetchall()
+        con.close()
+    finally:
+        for ext in ("", "-wal", "-shm"):
+            p = tmp.with_name(tmp.name + ext)
+            if p.exists():
+                try: p.unlink()
+                except OSError: pass
+
+    result = {}
+    for name, value, enc_val in rows:
+        if value:
+            result[name] = value
+        elif enc_val and enc_val[:3] in (b"v10", b"v11"):
+            try:
+                result[name] = _decrypt_cookie_value(key, enc_val)
+            except Exception:
+                pass
+    return result
+
+
+def _update_env_file(key: str, value: str) -> None:
+    """Update or append key=value in .env without touching other lines."""
+    env_path = BASE_DIR / ".env"
+    text  = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    lines = text.splitlines(keepends=True)
+    updated, new_lines = False, []
+    for line in lines:
+        if line.lstrip().startswith(f"{key}="):
+            new_lines.append(f"{key}={value}\n")
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines.append("\n")
+        new_lines.append(f"{key}={value}\n")
+    env_path.write_text("".join(new_lines), encoding="utf-8")
+    os.environ[key] = value
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.route("/linkedin/extract-cookies")
+def linkedin_extract_cookies():
+    try:
+        cookies = _extract_chrome_linkedin_cookies()
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": f"Cookie extraction failed: {e}"}), 500
+
+    if not cookies.get("li_at"):
+        return jsonify({"error": "li_at not found. Make sure you are logged into LinkedIn in Chrome."}), 404
+
+    _update_env_file("LI_AT", cookies["li_at"])
+    if cookies.get("JSESSIONID"):
+        _update_env_file("JSESSIONID", cookies["JSESSIONID"])
+
+    return jsonify({
+        "li_at":      cookies.get("li_at",      ""),
+        "jsessionid": cookies.get("JSESSIONID", ""),
+    })
+
 
 @app.route("/")
 def index():
     jobs = db.list_jobs(DB_PATH)
-    return render_template("index.html", jobs=jobs)
+    return render_template("index.html", jobs=jobs,
+                           saved_li_at=os.getenv("LI_AT", ""),
+                           saved_jsessionid=os.getenv("JSESSIONID", ""))
 
 
 @app.errorhandler(Exception)

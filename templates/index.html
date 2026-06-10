@@ -205,6 +205,13 @@
             </ol>
           </div>
 
+          <div style="margin-bottom:.75rem">
+            <button id="detectCookiesBtn" class="btn-secondary" onclick="detectChromeCookies()">
+              &#128269; Auto-detect from Chrome
+            </button>
+            <span id="detectStatus" class="hint" style="margin-left:.6rem"></span>
+          </div>
+
           <div class="form-row two-col">
             <div class="form-group">
               <label for="liAt">li_at cookie <span style="color:var(--red)">*</span></label>
@@ -656,6 +663,44 @@ async function copyToClipboard(text, btnId) {
   const orig = btn.textContent;
   btn.textContent = "✓ Copied!";
   setTimeout(() => { btn.textContent = orig; }, 2000);
+}
+
+// ── LinkedIn: pre-fill from saved .env values ────────────────────────────
+(function prefillLinkedIn() {
+  const savedLiAt      = {{ saved_li_at | tojson }};
+  const savedJsessionid = {{ saved_jsessionid | tojson }};
+  if (savedLiAt)       document.getElementById("liAt").value       = savedLiAt;
+  if (savedJsessionid) document.getElementById("jsessionId").value = savedJsessionid;
+  if (savedLiAt) {
+    document.getElementById("detectStatus").textContent = "Loaded from .env";
+  }
+})();
+
+async function detectChromeCookies() {
+  const btn    = document.getElementById("detectCookiesBtn");
+  const status = document.getElementById("detectStatus");
+  const errEl  = document.getElementById("lnError");
+  errEl.classList.add("hidden");
+  btn.disabled = true; btn.textContent = "Detecting…";
+  status.textContent = "";
+  try {
+    const res  = await fetch("/linkedin/extract-cookies");
+    const data = await res.json();
+    if (data.error) {
+      errEl.textContent = data.error;
+      errEl.classList.remove("hidden");
+      status.textContent = "";
+      return;
+    }
+    if (data.li_at)      document.getElementById("liAt").value       = data.li_at;
+    if (data.jsessionid) document.getElementById("jsessionId").value = data.jsessionid;
+    status.textContent = "✓ Detected and saved to .env";
+  } catch (err) {
+    errEl.textContent = "Detection failed: " + err.message;
+    errEl.classList.remove("hidden");
+  } finally {
+    btn.disabled = false; btn.textContent = "🔍 Auto-detect from Chrome";
+  }
 }
 
 // ── LinkedIn Import ───────────────────────────────────────────────────────
