@@ -315,30 +315,30 @@ def write_cover_letter(
         if cover_template else ""
     )
     template_instruction = (
-        "1. Adapt the provided cover letter template for this specific role — keep its structure, tone, and style "
+        "1. Adapt the provided cover letter template for this specific role — keep its structure and tone "
         "but update all content to match this job and company.\n"
         if cover_template else
-        "1. Mirror the applicant's executive, confident, results-oriented writing style from the resume.\n"
+        "1. Write in the applicant's natural voice from the resume — direct and confident, not corporate-polished.\n"
     )
 
     resp = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2048,
+        max_tokens=1536,
         messages=[{
             "role": "user",
             "content": (
-                "Write a compelling cover letter for this job application.\n\n"
+                "Write a cover letter for this job application. Aim for natural and direct — not over-polished or formulaic.\n\n"
                 f"APPLICANT RESUME:\n{resume_text}\n"
                 f"{template_section}\n"
                 f"POSITION: {title} at {company}\n"
                 f"JOB DESCRIPTION:\n{jd}\n\n"
                 "INSTRUCTIONS:\n"
                 f"{template_instruction}"
-                "2. Open with a strong hook that connects the applicant's background directly to this role.\n"
-                "3. In the body, cite 3-4 specific achievements with real metrics from the resume.\n"
-                "4. Show genuine, specific interest in this company and role.\n"
-                "5. Close with a clear call to action.\n"
-                "6. Length: 3-4 tight paragraphs — professional and concise.\n"
+                "2. Open with a direct statement of why this role is a fit — skip flowery hooks.\n"
+                "3. Mention 2-3 specific achievements with metrics from the resume.\n"
+                "4. Keep sentences short. Avoid corporate filler phrases like 'I am excited to' or 'I am passionate about'.\n"
+                "5. Close in one sentence — no elaborate call to action.\n"
+                "6. Length: 2-3 short paragraphs. Aim for roughly 200-250 words total.\n"
                 f"7. Include today's date: {today}\n"
                 "8. Output in Markdown.\n\n"
                 "Return only the cover letter in Markdown."
