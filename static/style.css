@@ -716,6 +716,36 @@ textarea { resize: vertical; min-height: 140px; }
 .ln-hint { font-size: .75rem; color: var(--muted); font-weight: 400; margin-left: .25rem; }
 .linkedin-body { margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
 
+.ln-cookie-steps {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .85rem 1rem;
+  font-size: .85rem;
+  line-height: 1.7;
+}
+.ln-cookie-steps ol {
+  margin: .4rem 0 0 1.2rem;
+  padding: 0;
+}
+.ln-cookie-steps a { color: var(--primary); }
+.ln-cookie-steps kbd {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .05rem .35rem;
+  font-size: .8rem;
+  font-family: monospace;
+}
+.ln-cookie-steps code {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .05rem .35rem;
+  font-size: .8rem;
+  font-family: monospace;
+}
+
 .ln-list-header {
   display: flex;
   align-items: center;

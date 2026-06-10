@@ -194,16 +194,25 @@
 
         <div class="linkedin-body">
 
+          <div class="ln-cookie-steps">
+            <strong>How to get your cookies (Chrome):</strong>
+            <ol>
+              <li>Open <a href="https://www.linkedin.com" target="_blank" rel="noopener">linkedin.com</a> and make sure you're logged in.</li>
+              <li>Press <kbd>F12</kbd> to open DevTools, then click the <strong>Application</strong> tab.</li>
+              <li>In the left sidebar, expand <strong>Storage → Cookies → https://www.linkedin.com</strong>.</li>
+              <li>Find <strong>li_at</strong> in the Name column — copy its Value.</li>
+              <li>Find <strong>JSESSIONID</strong> in the Name column — copy its Value (starts with <code>ajax:</code>).</li>
+            </ol>
+          </div>
+
           <div class="form-row two-col">
             <div class="form-group">
               <label for="liAt">li_at cookie <span style="color:var(--red)">*</span></label>
               <input type="password" id="liAt" placeholder="Paste li_at value" autocomplete="off" />
-              <span class="hint">DevTools → Application → Cookies → linkedin.com → <strong>li_at</strong></span>
             </div>
             <div class="form-group">
               <label for="jsessionId">JSESSIONID cookie <span style="color:var(--red)">*</span></label>
               <input type="password" id="jsessionId" placeholder="ajax:XXXXXXXXXXXXXXXX" autocomplete="off" />
-              <span class="hint">Same location: <strong>JSESSIONID</strong> (starts with ajax:…)</span>
             </div>
           </div>
 
