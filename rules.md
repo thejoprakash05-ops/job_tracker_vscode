@@ -7,3 +7,13 @@ These rules are applied every time the resume is tailored for a job. Follow them
 2. **Merge "Enterprise-Wide Influence" and "Organizational Management"**: Combine these two bullet points into a single, concise bullet point that captures both themes — leading a large cross-functional engineering ecosystem and fostering a culture of technical excellence. Keep the result in the same confident, executive writing style as the original. Place the merged bullet where either of the originals appeared.
 
 3. **Preserve the Observability & Reliability bullet in the Meta section**: Always keep the bullet point that begins with "Observability & Reliability Engineering" in the Facebook/Meta experience section exactly as written. Do not remove, shorten, or merge it regardless of the target role.
+
+4. **Do not bold sub-section label phrases inside bullet points**: Phrases like "Strategic Product Leadership:", "Organizational Leadership & Ecosystem Scale:", "Enterprise-Wide Influence:", or any similar descriptive label at the start of a bullet must be written in plain text — no bold, no markdown `**`.
+
+---
+
+# Cover Letter Rules
+
+These rules apply every time a cover letter is written.
+
+1. **Bold "At [Company]" references**: Whenever a sentence begins with or uses the phrasing "At [Company name]" (e.g., "At Cadence", "At Facebook", "At Synopsys", "At Meta"), bold the entire phrase: **At Cadence**, **At Facebook**, **At Synopsys**.

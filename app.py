@@ -34,7 +34,14 @@ db.migrate_from_files(JOBS_DIR, DB_PATH)
 BASE_RESUME = (BASE_DIR / "base_resume.md").read_text(encoding="utf-8")
 
 _rules_path = BASE_DIR / "rules.md"
-RESUME_RULES = _rules_path.read_text(encoding="utf-8").strip() if _rules_path.exists() else ""
+if _rules_path.exists():
+    _rules_raw = _rules_path.read_text(encoding="utf-8")
+    _split = re.split(r"\n---\n", _rules_raw, maxsplit=1)
+    RESUME_RULES = _split[0].strip()
+    COVER_LETTER_RULES = _split[1].strip() if len(_split) > 1 else ""
+else:
+    RESUME_RULES = ""
+    COVER_LETTER_RULES = ""
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +328,11 @@ def write_cover_letter(
         "1. Write in the applicant's natural voice from the resume — direct and confident, not corporate-polished.\n"
     )
 
+    cl_rules_section = (
+        f"\nPERMANENT COVER LETTER RULES — apply these exactly:\n{COVER_LETTER_RULES}\n"
+        if COVER_LETTER_RULES else ""
+    )
+
     resp = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1536,
@@ -330,6 +342,7 @@ def write_cover_letter(
                 "Write a cover letter for this job application. Aim for natural and direct — not over-polished or formulaic.\n\n"
                 f"APPLICANT RESUME:\n{resume_text}\n"
                 f"{template_section}\n"
+                f"{cl_rules_section}\n"
                 f"POSITION: {title} at {company}\n"
                 f"JOB DESCRIPTION:\n{jd}\n\n"
                 "INSTRUCTIONS:\n"
