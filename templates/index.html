@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Application Optimizer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <span class="logo">&#9670; Job Application Optimizer</span>
+    <span class="header-sub">Powered by Claude AI</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── INPUT CARD ────────────────────────────────────────────────── -->
+  <section id="inputSection">
+    <div class="card">
+      <h2 class="card-title">Analyze a Job Posting</h2>
+      <p class="card-sub">Paste a job URL and Claude will tailor your resume, write a cover letter, and score the match.</p>
+
+      <form id="analyzeForm" novalidate>
+
+        <div class="form-row">
+          <div class="form-group full">
+            <label for="url">Job Posting URL</label>
+            <input id="url" name="url" type="url"
+              placeholder="https://www.linkedin.com/jobs/... or any job board URL" />
+            <span class="hint">Works with most job boards. If a site blocks scraping, paste the JD below.</span>
+          </div>
+        </div>
+
+        <div class="form-row two-col">
+          <div class="form-group">
+            <label for="company">Company <span class="optional">(optional override)</span></label>
+            <input id="company" name="company" type="text" placeholder="Auto-detected from URL" />
+          </div>
+          <div class="form-group">
+            <label for="jobTitle">Job Title <span class="optional">(optional override)</span></label>
+            <input id="jobTitle" name="job_title" type="text" placeholder="Auto-detected from URL" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group full">
+            <label for="resumeFile">Resume <span class="optional">(.md, .txt, or .pdf — leave empty to use base resume)</span></label>
+            <input type="file" id="resumeFile" name="resume_file" accept=".md,.txt,.pdf" class="file-input" />
+            <span class="hint" id="resumeFileHint">No file selected — base resume will be used.</span>
+          </div>
+        </div>
+
+        <details class="manual-jd-details">
+          <summary>Paste job description manually (for LinkedIn, gated sites, or PDF JDs)</summary>
+          <div class="form-group" style="margin-top:0.75rem">
+            <textarea id="manualJD" name="manual_jd" rows="8"
+              placeholder="Paste the full job description text here..."></textarea>
+          </div>
+        </details>
+
+        <details class="upload-details">
+          <summary>Upload cover letter template <span class="optional">(optional)</span></summary>
+          <div class="form-group" style="margin-top:0.75rem">
+            <label for="coverTemplateFile">Cover letter template <span class="optional">(.md or .txt)</span></label>
+            <input type="file" id="coverTemplateFile" name="cover_template_file" accept=".md,.txt" class="file-input" />
+            <span class="hint">Claude will preserve your structure and style while updating content for this role.</span>
+          </div>
+        </details>
+
+        <div class="form-actions">
+          <button type="submit" id="submitBtn" class="btn-primary">
+            <span id="submitLabel">Analyze &amp; Optimize</span>
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </section>
+
+  <!-- ── LOADING CARD ──────────────────────────────────────────────── -->
+  <section id="loadingSection" class="hidden">
+    <div class="card loading-card">
+      <div class="spinner"></div>
+      <h3 id="loadingTitle">Processing your application…</h3>
+      <div class="steps-list">
+        <div class="step-item" id="step1"><span class="step-dot pending"></span> Fetching job description</div>
+        <div class="step-item" id="step2"><span class="step-dot pending"></span> Tailoring resume to the role</div>
+        <div class="step-item" id="step3"><span class="step-dot pending"></span> Writing cover letter</div>
+        <div class="step-item" id="step4"><span class="step-dot pending"></span> Calculating match score</div>
+        <div class="step-item" id="step5"><span class="step-dot pending"></span> Saving your files</div>
+      </div>
+      <p class="loading-note">This usually takes 30–60 seconds.</p>
+    </div>
+  </section>
+
+  <!-- ── ERROR BANNER ──────────────────────────────────────────────── -->
+  <div id="errorBanner" class="error-banner hidden"></div>
+
+  <!-- ── RESULTS ───────────────────────────────────────────────────── -->
+  <section id="resultsSection" class="hidden">
+
+    <!-- Match score card -->
+    <div class="card match-card">
+      <div class="score-wrapper">
+        <div class="score-ring" id="scoreRing">
+          <svg viewBox="0 0 120 120">
+            <circle class="track" cx="60" cy="60" r="50" />
+            <circle class="fill" id="scoreArc" cx="60" cy="60" r="50" />
+          </svg>
+          <div class="score-label">
+            <span id="scoreNumber">0</span><span class="pct">%</span>
+          </div>
+        </div>
+        <div class="score-meta">
+          <h2 id="jobTitle" class="result-job-title"></h2>
+          <p id="jobCompany" class="result-company"></p>
+          <p id="jobLocation" class="result-location"></p>
+          <p id="matchBadge" class="match-badge"></p>
+          <p id="resumeSourceChip" class="resume-source-chip hidden"></p>
+        </div>
+      </div>
+
+      <p id="matchSummary" class="match-summary"></p>
+
+      <div class="insights-grid">
+        <div class="insights-col">
+          <h4 class="insights-heading matched">&#10003; Matched Skills</h4>
+          <div id="matchedSkills" class="tag-list"></div>
+        </div>
+        <div class="insights-col">
+          <h4 class="insights-heading missing">&#9651; Missing / Gaps</h4>
+          <div id="missingSkills" class="tag-list"></div>
+        </div>
+        <div class="insights-col">
+          <h4 class="insights-heading strengths">&#9654; Strengths</h4>
+          <ul id="strengthsList" class="bullet-list"></ul>
+        </div>
+        <div class="insights-col">
+          <h4 class="insights-heading gaps">&#9656; Areas to Address</h4>
+          <ul id="gapsList" class="bullet-list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- File previews -->
+    <div class="card preview-card">
+      <div class="tab-bar">
+        <button class="tab active" data-tab="resume">Tailored Resume</button>
+        <button class="tab" data-tab="cover">Cover Letter</button>
+        <button class="tab" data-tab="jd">Job Description</button>
+      </div>
+
+      <!-- Resume tab -->
+      <div class="tab-pane active" id="tab-resume">
+        <div class="pane-actions">
+          <button class="btn-pdf"       id="dlResumePdf">&#8615; PDF</button>
+          <button class="btn-secondary" id="dlResumeMd">&#8615; Markdown</button>
+          <button class="btn-secondary" id="copyResume">&#10697; Copy</button>
+        </div>
+        <div class="markdown-body" id="resumePreview"></div>
+      </div>
+
+      <!-- Cover letter tab -->
+      <div class="tab-pane" id="tab-cover">
+        <div class="pane-actions">
+          <button class="btn-pdf"       id="dlCoverPdf">&#8615; PDF</button>
+          <button class="btn-secondary" id="dlCoverMd">&#8615; Markdown</button>
+          <button class="btn-secondary" id="copyCover">&#10697; Copy</button>
+        </div>
+        <div class="markdown-body" id="coverPreview"></div>
+      </div>
+
+      <!-- JD tab -->
+      <div class="tab-pane" id="tab-jd">
+        <div class="markdown-body" id="jdPreview"></div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── HISTORY ───────────────────────────────────────────────────── -->
+  <section id="historySection">
+    <h2 class="section-heading">Previous Applications</h2>
+    {% if jobs %}
+    <div class="jobs-grid">
+      {% for job in jobs %}
+      <div class="job-card" data-folder="{{ job.folder }}" title="Click to view results">
+        <div class="job-card-score
+          {% if job.match_percentage >= 80 %} score-high
+          {% elif job.match_percentage >= 60 %} score-mid
+          {% else %} score-low{% endif %}">
+          {{ job.match_percentage }}%
+        </div>
+        <div class="job-card-info">
+          <p class="job-card-title">{{ job.title }}</p>
+          <p class="job-card-company">{{ job.company }}</p>
+          {% if job.location %}<p class="job-card-location">{{ job.location }}</p>{% endif %}
+          <p class="job-card-date">{{ job.date }}</p>
+        </div>
+        <div class="job-card-links">
+          {% if job.has_pdf %}
+          <a href="/jobs/{{ job.folder }}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+          <a href="/jobs/{{ job.folder }}/download/cover_letter.pdf" class="link-dl link-pdf">Cover PDF</a>
+          {% else %}
+          <a href="/jobs/{{ job.folder }}/download/tailored_resume.md" class="link-dl">Resume</a>
+          <a href="/jobs/{{ job.folder }}/download/cover_letter.md" class="link-dl">Cover Letter</a>
+          {% endif %}
+          <a href="/jobs/{{ job.folder }}/download/job_description.md" class="link-dl">JD</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">No applications analyzed yet. Submit a job URL above to get started.</p>
+    {% endif %}
+  </section>
+
+</main>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+let currentFolder = null;
+let rawResume = "";
+let rawCover  = "";
+let rawJD     = "";
+
+// ── DOM refs ─────────────────────────────────────────────────────────────
+const form          = document.getElementById("analyzeForm");
+const inputSection  = document.getElementById("inputSection");
+const loadingSection= document.getElementById("loadingSection");
+const errorBanner   = document.getElementById("errorBanner");
+const resultsSection= document.getElementById("resultsSection");
+const submitBtn     = document.getElementById("submitBtn");
+const submitLabel   = document.getElementById("submitLabel");
+
+// ── Resume file hint ─────────────────────────────────────────────────────
+document.getElementById("resumeFile").addEventListener("change", (e) => {
+  const hint = document.getElementById("resumeFileHint");
+  hint.textContent = e.target.files[0]
+    ? `Selected: ${e.target.files[0].name}`
+    : "No file selected — base resume will be used.";
+});
+
+// ── Step animation ───────────────────────────────────────────────────────
+const STEPS = ["step1","step2","step3","step4","step5"];
+let stepInterval = null;
+let currentStep  = 0;
+
+function startStepAnimation() {
+  currentStep = 0;
+  STEPS.forEach(id => {
+    const dot = document.querySelector(`#${id} .step-dot`);
+    dot.className = "step-dot pending";
+  });
+  activateStep(0);
+  stepInterval = setInterval(() => {
+    currentStep++;
+    if (currentStep < STEPS.length) activateStep(currentStep);
+  }, 10000);
+}
+
+function activateStep(idx) {
+  if (idx > 0) {
+    const prevDot = document.querySelector(`#${STEPS[idx-1]} .step-dot`);
+    prevDot.className = "step-dot done";
+  }
+  const dot = document.querySelector(`#${STEPS[idx]} .step-dot`);
+  dot.className = "step-dot active";
+}
+
+function finishSteps() {
+  clearInterval(stepInterval);
+  STEPS.forEach(id => {
+    const dot = document.querySelector(`#${id} .step-dot`);
+    dot.className = "step-dot done";
+  });
+}
+
+// ── Form submit ──────────────────────────────────────────────────────────
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const url       = document.getElementById("url").value.trim();
+  const manualJD  = document.getElementById("manualJD").value.trim();
+  const company   = document.getElementById("company").value.trim();
+  const jobTitle  = document.getElementById("jobTitle").value.trim();
+
+  if (!url && !manualJD) {
+    showError("Please enter a job URL or paste the job description.");
+    return;
+  }
+
+  hideError();
+  showLoading();
+  startStepAnimation();
+
+  const formData = new FormData();
+  formData.append("url",        url);
+  formData.append("manual_jd",  manualJD);
+  formData.append("company",    company);
+  formData.append("job_title",  jobTitle);
+
+  const resumeFileInput       = document.getElementById("resumeFile");
+  const coverTemplateInput    = document.getElementById("coverTemplateFile");
+  if (resumeFileInput.files[0])    formData.append("resume_file",          resumeFileInput.files[0]);
+  if (coverTemplateInput.files[0]) formData.append("cover_template_file",  coverTemplateInput.files[0]);
+
+  try {
+    const res  = await fetch("/analyze", { method: "POST", body: formData });
+
+    // Always read as text first so we can show it even if JSON parsing fails
+    const raw  = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      finishSteps();
+      hideLoading();
+      showError(
+        `Server error ${res.status}: ` +
+        (raw.substring(0, 400) || "No response body. Check the terminal for the full traceback.")
+      );
+      return;
+    }
+
+    finishSteps();
+
+    if (!res.ok || data.error) {
+      hideLoading();
+      const detail = data.detail
+        ? `\n\nDetail:\n${data.detail.split("\n").slice(-6).join("\n")}`
+        : "";
+      showError((data.error || "An unexpected error occurred.") + detail);
+      return;
+    }
+
+    hideLoading();
+    renderResults(data);
+    refreshHistory(data);
+
+  } catch (err) {
+    finishSteps();
+    hideLoading();
+    showError(
+      "Could not reach the server. Make sure app.py is running.\n" + err.message
+    );
+  }
+});
+
+// ── Render results ────────────────────────────────────────────────────────
+function renderResults(data) {
+  currentFolder = data.folder;
+  rawResume = data.tailored_resume;
+  rawCover  = data.cover_letter;
+  rawJD     = data.job_description;
+
+  const a = data.analysis;
+
+  // Job meta
+  document.getElementById("jobTitle").textContent   = data.title;
+  document.getElementById("jobCompany").textContent  = data.company;
+  document.getElementById("jobLocation").textContent = data.location || "";
+
+  // Score ring
+  const pct = a.match_percentage || 0;
+  animateScore(pct);
+  renderBadge(pct);
+
+  // Summary
+  document.getElementById("matchSummary").textContent = a.summary || "";
+
+  // Skills tags
+  renderTags("matchedSkills", a.matched_skills || [], "tag-green");
+  renderTags("missingSkills", a.missing_skills || [], "tag-orange");
+
+  // Lists
+  renderList("strengthsList", a.strengths || []);
+  renderList("gapsList",       a.gaps     || []);
+
+  // Markdown previews
+  document.getElementById("resumePreview").innerHTML = marked.parse(rawResume);
+  document.getElementById("coverPreview").innerHTML  = marked.parse(rawCover);
+  document.getElementById("jdPreview").innerHTML     = marked.parse(rawJD);
+
+  // Download buttons
+  const hasPdf = !!data.has_pdf;
+  document.getElementById("dlResumePdf").onclick  = () =>
+    window.location.href = `/jobs/${currentFolder}/download/tailored_resume.pdf`;
+  document.getElementById("dlResumeMd").onclick   = () =>
+    window.location.href = `/jobs/${currentFolder}/download/tailored_resume.md`;
+  document.getElementById("dlCoverPdf").onclick   = () =>
+    window.location.href = `/jobs/${currentFolder}/download/cover_letter.pdf`;
+  document.getElementById("dlCoverMd").onclick    = () =>
+    window.location.href = `/jobs/${currentFolder}/download/cover_letter.md`;
+
+  // Show/hide PDF buttons based on generation success
+  document.getElementById("dlResumePdf").style.display = hasPdf ? "" : "none";
+  document.getElementById("dlCoverPdf").style.display  = hasPdf ? "" : "none";
+
+  // Copy buttons
+  document.getElementById("copyResume").onclick = () => copyToClipboard(rawResume, "copyResume");
+  document.getElementById("copyCover").onclick  = () => copyToClipboard(rawCover,  "copyCover");
+
+  // Resume source chip
+  const chip = document.getElementById("resumeSourceChip");
+  if (data.resume_source === "uploaded") {
+    chip.textContent = "Using uploaded resume";
+    chip.className = "resume-source-chip chip-uploaded";
+  } else {
+    chip.textContent = "Using base resume";
+    chip.className = "resume-source-chip chip-base";
+  }
+
+  resultsSection.classList.remove("hidden");
+  resultsSection.scrollIntoView({ behavior: "smooth" });
+}
+
+function animateScore(target) {
+  const arc    = document.getElementById("scoreArc");
+  const numEl  = document.getElementById("scoreNumber");
+  const circumference = 2 * Math.PI * 50; // r=50
+
+  arc.style.strokeDasharray  = circumference;
+  arc.style.strokeDashoffset  = circumference;
+
+  // colour
+  const color = target >= 80 ? "#16a34a" : target >= 60 ? "#2563eb" : target >= 40 ? "#d97706" : "#dc2626";
+  arc.style.stroke = color;
+
+  let current = 0;
+  const step  = target / 60;
+  const timer = setInterval(() => {
+    current = Math.min(current + step, target);
+    const offset = circumference - (current / 100) * circumference;
+    arc.style.strokeDashoffset = offset;
+    numEl.textContent = Math.round(current);
+    if (current >= target) clearInterval(timer);
+  }, 16);
+}
+
+function renderBadge(pct) {
+  const el = document.getElementById("matchBadge");
+  if      (pct >= 80) { el.textContent = "Strong Match";   el.className = "match-badge badge-green"; }
+  else if (pct >= 60) { el.textContent = "Good Match";     el.className = "match-badge badge-blue";  }
+  else if (pct >= 40) { el.textContent = "Partial Match";  el.className = "match-badge badge-amber"; }
+  else                { el.textContent = "Low Match";      el.className = "match-badge badge-red";   }
+}
+
+function renderTags(containerId, items, cls) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = items.length
+    ? items.map(s => `<span class="tag ${cls}">${escHtml(s)}</span>`).join("")
+    : '<span class="tag tag-none">None identified</span>';
+}
+
+function renderList(containerId, items) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = items.length
+    ? items.map(s => `<li>${escHtml(s)}</li>`).join("")
+    : "<li>—</li>";
+}
+
+function refreshHistory(data) {
+  const pct = data.analysis.match_percentage || 0;
+  const cls = pct >= 80 ? "score-high" : pct >= 60 ? "score-mid" : "score-low";
+  const card = document.createElement("div");
+  card.className = "job-card new-card";
+  card.innerHTML = `
+    <div class="job-card-score ${cls}">${pct}%</div>
+    <div class="job-card-info">
+      <p class="job-card-title">${escHtml(data.title)}</p>
+      <p class="job-card-company">${escHtml(data.company)}</p>
+      ${data.location ? `<p class="job-card-location">${escHtml(data.location)}</p>` : ""}
+      <p class="job-card-date">${new Date().toLocaleString()}</p>
+    </div>
+    <div class="job-card-links">
+      ${data.has_pdf
+        ? `<a href="/jobs/${data.folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+           <a href="/jobs/${data.folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>`
+        : `<a href="/jobs/${data.folder}/download/tailored_resume.md" class="link-dl">Resume</a>
+           <a href="/jobs/${data.folder}/download/cover_letter.md"    class="link-dl">Cover Letter</a>`
+      }
+      <a href="/jobs/${data.folder}/download/job_description.md" class="link-dl">JD</a>
+    </div>`;
+  const grid = document.querySelector(".jobs-grid");
+  const empty = document.querySelector(".empty-state");
+  if (empty) empty.remove();
+  if (!grid) {
+    const newGrid = document.createElement("div");
+    newGrid.className = "jobs-grid";
+    newGrid.appendChild(card);
+    document.getElementById("historySection").appendChild(newGrid);
+  } else {
+    grid.insertBefore(card, grid.firstChild);
+  }
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────
+document.addEventListener("click", (e) => {
+  if (!e.target.matches(".tab")) return;
+  const tabName = e.target.dataset.tab;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+  e.target.classList.add("active");
+  document.getElementById(`tab-${tabName}`).classList.add("active");
+});
+
+// ── History card click → load saved results ───────────────────────────────
+document.addEventListener("click", (e) => {
+  // Ignore clicks on download links inside the card
+  if (e.target.closest(".job-card-links")) return;
+  const card = e.target.closest(".job-card[data-folder]");
+  if (!card) return;
+  loadJobData(card.dataset.folder);
+});
+
+async function loadJobData(folder) {
+  hideError();
+  // Briefly show a loading indicator without clearing the input form
+  const btn = submitBtn;
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  try {
+    const res  = await fetch(`/jobs/${folder}/data`);
+    const raw  = await res.text();
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (_) {
+      showError(`Could not parse response (HTTP ${res.status}): ${raw.substring(0, 200)}`);
+      return;
+    }
+    if (data.error) { showError(data.error); return; }
+    renderResults(data);
+  } catch (err) {
+    showError("Could not load job: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Analyze & Optimize";
+  }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+function showLoading() {
+  inputSection.classList.add("hidden");
+  loadingSection.classList.remove("hidden");
+  submitBtn.disabled = true;
+}
+function hideLoading() {
+  loadingSection.classList.add("hidden");
+  inputSection.classList.remove("hidden");
+  submitBtn.disabled = false;
+}
+function showError(msg) {
+  errorBanner.textContent = msg;
+  errorBanner.classList.remove("hidden");
+  errorBanner.scrollIntoView({ behavior: "smooth" });
+}
+function hideError() {
+  errorBanner.classList.add("hidden");
+}
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+async function copyToClipboard(text, btnId) {
+  await navigator.clipboard.writeText(text);
+  const btn = document.getElementById(btnId);
+  const orig = btn.textContent;
+  btn.textContent = "✓ Copied!";
+  setTimeout(() => { btn.textContent = orig; }, 2000);
+}
+</script>
+</body>
+</html>
