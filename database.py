@@ -9,6 +9,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 DDL = """
+CREATE TABLE IF NOT EXISTS skill_cache (
+    skill     TEXT PRIMARY KEY,
+    html      TEXT NOT NULL,
+    cached_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     folder          TEXT    NOT NULL UNIQUE,
@@ -124,6 +130,26 @@ def get_job(db_path: Path, folder: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # One-time migration from legacy file-based storage
 # ---------------------------------------------------------------------------
+
+def get_skill_cache(db_path: Path, skill: str) -> dict | None:
+    with _conn(db_path) as con:
+        row = con.execute(
+            "SELECT html, cached_at FROM skill_cache WHERE skill = ?",
+            (skill.lower(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_skill_cache(db_path: Path, skill: str, html: str) -> None:
+    from datetime import datetime
+    cached_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with _conn(db_path) as con:
+        con.execute(
+            """INSERT INTO skill_cache (skill, html, cached_at) VALUES (?, ?, ?)
+               ON CONFLICT(skill) DO UPDATE SET html=excluded.html, cached_at=excluded.cached_at""",
+            (skill.lower(), html, cached_at),
+        )
+
 
 def upsert_has_pdf(db_path: Path, folder: str) -> None:
     with _conn(db_path) as con:

@@ -1,14 +1,17 @@
 import io
 import os
 import json
+import queue
 import re
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 import anthropic
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, jsonify, send_from_directory, abort
+from flask import Flask, Response, render_template, request, jsonify, send_from_directory, abort, stream_with_context
 from dotenv import load_dotenv
 
 import database as db
@@ -77,8 +80,8 @@ def generate_pdf(md_text: str, output_path: Path) -> bool:
             return s.strip()
 
         pdf = FPDF(format="Letter")
-        pdf.set_margins(left=15, top=15, right=15)
-        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_margins(left=20, top=20, right=20)
+        pdf.set_auto_page_break(auto=True, margin=20)
         pdf.add_page()
 
         for raw in md_text.splitlines():
@@ -437,27 +440,24 @@ def analyze():
         return jsonify({"error": f"{type(e).__name__}: {e}", "detail": tb}), 500
 
 
-def _do_analyze():
-    url = request.form.get("url", "").strip()
-    manual_jd = request.form.get("manual_jd", "").strip()
-    company_override = request.form.get("company", "").strip()
-    title_override = request.form.get("job_title", "").strip()
+def _run_analysis(
+    url: str = "",
+    manual_jd: str = "",
+    company_override: str = "",
+    title_override: str = "",
+    resume_text: str = "",
+    cover_template: str = "",
+) -> dict:
+    """Core analysis logic — callable from the web endpoint and batch jobs."""
+    client = get_client()
 
-    try:
-        client = get_client()
-    except EnvironmentError as e:
-        return jsonify({"error": str(e)}), 500
+    if not resume_text.strip():
+        resume_text = BASE_RESUME
+        resume_source = "base"
+    else:
+        resume_source = "uploaded"
 
-    # --- Resolve resume and cover template sources ---
-    uploaded_resume = read_uploaded_text(request.files.get("resume_file"))
-    resume_text = uploaded_resume if uploaded_resume.strip() else BASE_RESUME
-    resume_source = "uploaded" if uploaded_resume.strip() else "base"
-
-    cover_template = read_uploaded_text(request.files.get("cover_template_file"))
-
-    # --- Step 1: obtain JD data ---
     jd_data: dict = {}
-
     if url:
         try:
             raw = fetch_page_text(url)
@@ -468,26 +468,24 @@ def _do_analyze():
             if manual_jd:
                 jd_data = {
                     "company": company_override or "Unknown",
-                    "title": title_override or "Unknown",
+                    "title":   title_override   or "Unknown",
                     "location": "",
                     "job_description": manual_jd,
                 }
             else:
-                return jsonify({
-                    "error": (
-                        f"Could not fetch the job page ({fetch_err}). "
-                        "Please paste the job description manually and try again."
-                    )
-                }), 400
+                raise RuntimeError(
+                    f"Could not fetch the job page ({fetch_err}). "
+                    "Please paste the job description manually and try again."
+                ) from fetch_err
     elif manual_jd:
         jd_data = {
             "company": company_override or "Unknown",
-            "title": title_override or "Unknown",
+            "title":   title_override   or "Unknown",
             "location": "",
             "job_description": manual_jd,
         }
     else:
-        return jsonify({"error": "Please provide a URL or paste the job description."}), 400
+        raise ValueError("Please provide a URL or paste the job description.")
 
     if company_override:
         jd_data["company"] = company_override
@@ -495,16 +493,14 @@ def _do_analyze():
         jd_data["title"] = title_override
 
     company = jd_data.get("company", "Unknown")
-    title = jd_data.get("title", "Unknown")
+    title   = jd_data.get("title",   "Unknown")
     jd_text = jd_data.get("job_description", "")
 
-    # --- Steps 2-4: AI processing ---
     tailored = tailor_resume(resume_text, jd_text, company, title, client)
-    cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
+    cover    = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
     analysis = analyze_match(jd_text, tailored, client)
 
-    # --- Step 5: save files to disk (for downloads) ---
-    folder = safe_folder(company, title)
+    folder  = safe_folder(company, title)
     job_dir = JOBS_DIR / folder
     job_dir.mkdir(exist_ok=True)
 
@@ -518,43 +514,73 @@ def _do_analyze():
     )
 
     print(f"[analyze] saving files for {company} / {title}")
-    (job_dir / "job_description.md").write_text(jd_md, encoding="utf-8")
+    (job_dir / "job_description.md").write_text(jd_md,    encoding="utf-8")
     (job_dir / "tailored_resume.md").write_text(tailored, encoding="utf-8")
-    (job_dir / "cover_letter.md").write_text(cover, encoding="utf-8")
+    (job_dir / "cover_letter.md").write_text(cover,       encoding="utf-8")
 
-    # --- Step 6: persist metadata + content to SQLite ---
     print("[analyze] writing to database")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     db.upsert_job(DB_PATH, {
+        "folder":           folder,
+        "company":          company,
+        "title":            title,
+        "location":         jd_data.get("location", ""),
+        "url":              url,
+        "created_at":       created_at,
+        "match_percentage": analysis.get("match_percentage", 0),
+        "has_pdf":          False,
+        "resume_source":    resume_source,
+        "analysis":         analysis,
+        "tailored_resume":  tailored,
+        "cover_letter":     cover,
+        "job_description":  jd_md,
+    })
+
+    return {
+        "success":         True,
         "folder":          folder,
         "company":         company,
         "title":           title,
         "location":        jd_data.get("location", ""),
-        "url":             url,
-        "created_at":      created_at,
-        "match_percentage":analysis.get("match_percentage", 0),
-        "has_pdf":         False,   # PDFs are generated on first download, not here
-        "resume_source":   resume_source,
         "analysis":        analysis,
         "tailored_resume": tailored,
         "cover_letter":    cover,
-        "job_description": jd_md,
-    })
-
-    print("[analyze] done — returning response")
-    return jsonify({
-        "success": True,
-        "folder": folder,
-        "company": company,
-        "title": title,
-        "location": jd_data.get("location", ""),
-        "analysis": analysis,
-        "tailored_resume": tailored,
-        "cover_letter": cover,
         "job_description": jd_text,
-        "has_pdf": True,       # always offer PDF buttons; generated on first click
-        "resume_source": resume_source,
-    })
+        "has_pdf":         True,
+        "resume_source":   resume_source,
+    }
+
+
+def _do_analyze():
+    url              = request.form.get("url",       "").strip()
+    manual_jd        = request.form.get("manual_jd", "").strip()
+    company_override = request.form.get("company",   "").strip()
+    title_override   = request.form.get("job_title", "").strip()
+
+    if not url and not manual_jd:
+        return jsonify({"error": "Please provide a URL or paste the job description."}), 400
+
+    uploaded_resume = read_uploaded_text(request.files.get("resume_file"))
+    cover_template  = read_uploaded_text(request.files.get("cover_template_file"))
+
+    try:
+        result = _run_analysis(
+            url=url,
+            manual_jd=manual_jd,
+            company_override=company_override,
+            title_override=title_override,
+            resume_text=uploaded_resume,
+            cover_template=cover_template,
+        )
+        print("[analyze] done — returning response")
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        return jsonify({"error": str(e), "detail": tb}), 500
 
 
 @app.route("/jobs/<folder>/data")
@@ -626,9 +652,16 @@ def skill_builder():
 
 @app.route("/skill-builder/content")
 def skill_builder_content():
-    skill = request.args.get("skill", "").strip()
+    skill   = request.args.get("skill",   "").strip()
+    refresh = request.args.get("refresh", "") == "1"
     if not skill:
         return jsonify({"error": "No skill specified"}), 400
+
+    if not refresh:
+        cached = db.get_skill_cache(DB_PATH, skill)
+        if cached:
+            return jsonify({"html": cached["html"], "skill": skill,
+                            "cached": True, "cached_at": cached["cached_at"]})
 
     try:
         client = get_client()
@@ -722,7 +755,165 @@ def skill_builder_content():
     html_content = re.sub(r"^```html?\s*", "", html_content)
     html_content = re.sub(r"\s*```$", "", html_content)
 
-    return jsonify({"html": html_content, "skill": skill})
+    db.set_skill_cache(DB_PATH, skill, html_content)
+    return jsonify({"html": html_content, "skill": skill, "cached": False})
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn saved-job import
+# ---------------------------------------------------------------------------
+
+_LN_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept":                     "application/vnd.linkedin.normalized+json+2.1",
+    "Accept-Language":            "en-US,en;q=0.9",
+    "x-restli-protocol-version": "2.0.0",
+    "x-li-lang":                  "en_US",
+}
+
+
+def _ln_session(li_at: str, jsessionid: str) -> requests.Session:
+    s = requests.Session()
+    s.headers.update(_LN_HEADERS)
+    s.cookies.set("li_at",      li_at,      domain=".linkedin.com")
+    s.cookies.set("JSESSIONID", jsessionid, domain=".linkedin.com")
+    s.headers["csrf-token"] = jsessionid
+    return s
+
+
+def _fetch_saved_jobs(li_at: str, jsessionid: str, max_count: int = 200) -> list[dict]:
+    sess  = _ln_session(li_at, jsessionid)
+    jobs  = []
+    start = 0
+
+    while start < max_count:
+        resp = sess.get(
+            "https://www.linkedin.com/voyager/api/myItems/savedJobPostings",
+            params={"count": 40, "start": start},
+            timeout=20,
+        )
+        if resp.status_code == 401:
+            raise ValueError("LinkedIn authentication failed — check your li_at cookie.")
+        if resp.status_code == 403:
+            raise ValueError("LinkedIn returned 403 — your JSESSIONID (csrf-token) may be wrong.")
+        resp.raise_for_status()
+
+        data     = resp.json()
+        paging   = data.get("paging", {})
+        included = data.get("included", [])
+
+        batch = []
+        for item in included:
+            if "JobPosting" not in str(item.get("$type", "")):
+                continue
+            m = re.search(r"urn:li:jobPosting:(\d+)", item.get("entityUrn", ""))
+            if not m:
+                continue
+            job_id  = m.group(1)
+            title   = item.get("title", "Unknown")
+            company = ""
+            cd = item.get("companyDetails", {})
+            if isinstance(cd, dict):
+                c = cd.get("company", {})
+                company = (c.get("name", "") if isinstance(c, dict) else "") or cd.get("companyName", "")
+            batch.append({
+                "job_id":  job_id,
+                "title":   title,
+                "company": company,
+                "url":     f"https://www.linkedin.com/jobs/view/{job_id}/",
+            })
+
+        jobs.extend(batch)
+        total  = paging.get("total", 0)
+        start += 40
+        if start >= total or not batch:
+            break
+
+    return jobs
+
+
+_batch_queues: dict = {}
+
+
+@app.route("/linkedin/saved-jobs")
+def linkedin_saved_jobs():
+    li_at      = request.args.get("li_at",      "").strip()
+    jsessionid = request.args.get("jsessionid", "").strip()
+    company_f  = request.args.get("company",    "").strip().lower()
+
+    if not li_at or not jsessionid:
+        return jsonify({"error": "Both li_at and JSESSIONID cookies are required."}), 400
+
+    try:
+        jobs = _fetch_saved_jobs(li_at, jsessionid)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        return jsonify({"error": f"Could not fetch LinkedIn saved jobs: {e}"}), 500
+
+    if company_f:
+        jobs = [j for j in jobs
+                if company_f in j.get("company", "").lower()
+                or company_f in j.get("title",   "").lower()]
+
+    return jsonify({"jobs": jobs, "total": len(jobs)})
+
+
+@app.route("/linkedin/start-batch", methods=["POST"])
+def linkedin_start_batch():
+    data = request.json or {}
+    urls = data.get("urls", [])
+    if not urls:
+        return jsonify({"error": "No URLs provided"}), 400
+
+    batch_id = uuid.uuid4().hex[:10]
+    q: queue.Queue = queue.Queue()
+    _batch_queues[batch_id] = q
+
+    def run_batch():
+        for url in urls:
+            q.put({"status": "analyzing", "url": url})
+            try:
+                result = _run_analysis(url=url)
+                q.put({"status": "done", "url": url, "result": result})
+            except Exception as e:
+                q.put({"status": "error", "url": url, "error": str(e)})
+        q.put(None)
+
+    threading.Thread(target=run_batch, daemon=True).start()
+    return jsonify({"batch_id": batch_id})
+
+
+@app.route("/linkedin/batch-stream/<batch_id>")
+def linkedin_batch_stream(batch_id: str):
+    q = _batch_queues.get(batch_id)
+    if q is None:
+        return jsonify({"error": "Batch not found"}), 404
+
+    def generate():
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=120)
+                except queue.Empty:
+                    yield "data: " + json.dumps({"status": "ping"}) + "\n\n"
+                    continue
+                if msg is None:
+                    yield "data: " + json.dumps({"status": "complete"}) + "\n\n"
+                    break
+                yield "data: " + json.dumps(msg) + "\n\n"
+        finally:
+            _batch_queues.pop(batch_id, None)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

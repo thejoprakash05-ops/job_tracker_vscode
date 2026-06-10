@@ -182,6 +182,68 @@
 
   </section>
 
+  <!-- ── LINKEDIN IMPORT ──────────────────────────────────────────── -->
+  <section id="linkedinSection">
+    <div class="card">
+      <details id="linkedinDetails">
+        <summary class="linkedin-summary">
+          <span class="ln-logo">in</span>
+          Import from LinkedIn Saved Jobs
+          <span class="ln-hint">— analyze all your saved jobs in bulk</span>
+        </summary>
+
+        <div class="linkedin-body">
+
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label for="liAt">li_at cookie <span style="color:var(--red)">*</span></label>
+              <input type="password" id="liAt" placeholder="Paste li_at value" autocomplete="off" />
+              <span class="hint">DevTools → Application → Cookies → linkedin.com → <strong>li_at</strong></span>
+            </div>
+            <div class="form-group">
+              <label for="jsessionId">JSESSIONID cookie <span style="color:var(--red)">*</span></label>
+              <input type="password" id="jsessionId" placeholder="ajax:XXXXXXXXXXXXXXXX" autocomplete="off" />
+              <span class="hint">Same location: <strong>JSESSIONID</strong> (starts with ajax:…)</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" style="max-width:300px">
+              <label for="lnCompany">Filter by company <span class="optional">(optional)</span></label>
+              <input type="text" id="lnCompany" placeholder="e.g. Google, Meta" />
+            </div>
+          </div>
+
+          <div>
+            <button id="fetchLnBtn" class="btn-secondary" onclick="fetchLinkedInJobs()">Fetch Saved Jobs</button>
+          </div>
+
+          <div id="lnJobList" class="hidden">
+            <div class="ln-list-header">
+              <span id="lnJobCount"></span>
+              <div class="ln-list-actions">
+                <button class="btn-link" onclick="lnSelectAll(true)">Select All</button>
+                <button class="btn-link" onclick="lnSelectAll(false)">Deselect All</button>
+              </div>
+            </div>
+            <div id="lnJobItems" class="ln-job-items"></div>
+            <div class="form-actions" style="margin-top:.85rem">
+              <button id="analyzeLnBtn" class="btn-primary" onclick="analyzeLnJobs()">Analyze Selected</button>
+            </div>
+          </div>
+
+          <div id="lnProgress" class="ln-progress-wrap hidden">
+            <div class="ln-progress-bar-bg"><div id="lnProgressBar" class="ln-progress-bar"></div></div>
+            <p id="lnProgressText" class="ln-progress-text"></p>
+          </div>
+
+          <div id="lnError" class="error-banner hidden"></div>
+
+        </div>
+      </details>
+    </div>
+  </section>
+
   <!-- ── HISTORY ───────────────────────────────────────────────────── -->
   <section id="historySection">
     <h2 class="section-heading">Previous Applications</h2>
@@ -585,6 +647,147 @@ async function copyToClipboard(text, btnId) {
   const orig = btn.textContent;
   btn.textContent = "✓ Copied!";
   setTimeout(() => { btn.textContent = orig; }, 2000);
+}
+
+// ── LinkedIn Import ───────────────────────────────────────────────────────
+let lnFetchedJobs = [];
+
+async function fetchLinkedInJobs() {
+  const liAt      = document.getElementById("liAt").value.trim();
+  const jsessionId= document.getElementById("jsessionId").value.trim();
+  const company   = document.getElementById("lnCompany").value.trim();
+  const errEl     = document.getElementById("lnError");
+  errEl.classList.add("hidden");
+
+  if (!liAt || !jsessionId) {
+    errEl.textContent = "Both li_at and JSESSIONID cookies are required.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
+  const btn = document.getElementById("fetchLnBtn");
+  btn.disabled = true; btn.textContent = "Fetching…";
+
+  try {
+    const params = new URLSearchParams({ li_at: liAt, jsessionid: jsessionId });
+    if (company) params.append("company", company);
+    const res  = await fetch("/linkedin/saved-jobs?" + params);
+    const data = await res.json();
+    if (data.error) { errEl.textContent = data.error; errEl.classList.remove("hidden"); return; }
+    lnFetchedJobs = data.jobs;
+    renderLnJobList(data.jobs, company);
+  } catch (err) {
+    errEl.textContent = "Failed to reach server: " + err.message;
+    errEl.classList.remove("hidden");
+  } finally {
+    btn.disabled = false; btn.textContent = "Fetch Saved Jobs";
+  }
+}
+
+function renderLnJobList(jobs, companyFilter) {
+  const listEl  = document.getElementById("lnJobList");
+  const itemsEl = document.getElementById("lnJobItems");
+  const countEl = document.getElementById("lnJobCount");
+  const analyzeBtn = document.getElementById("analyzeLnBtn");
+
+  if (jobs.length === 0) {
+    countEl.textContent = companyFilter
+      ? `No saved jobs found matching "${companyFilter}".`
+      : "No saved jobs found.";
+    itemsEl.innerHTML = "";
+    analyzeBtn.style.display = "none";
+    listEl.classList.remove("hidden");
+    return;
+  }
+
+  countEl.textContent = `Found ${jobs.length} saved job${jobs.length !== 1 ? "s" : ""}${companyFilter ? ` matching "${companyFilter}"` : ""}`;
+  itemsEl.innerHTML = jobs.map((j, i) => `
+    <label class="ln-job-item">
+      <input type="checkbox" class="ln-checkbox" data-idx="${i}" checked />
+      <div class="ln-job-info">
+        <span class="ln-job-title">${escHtml(j.title)}</span>
+        <span class="ln-job-company">${escHtml(j.company || "Unknown Company")}</span>
+      </div>
+    </label>`).join("");
+
+  analyzeBtn.style.display = "";
+  listEl.classList.remove("hidden");
+  updateLnBtnLabel();
+  document.querySelectorAll(".ln-checkbox").forEach(cb =>
+    cb.addEventListener("change", updateLnBtnLabel));
+}
+
+function lnSelectAll(checked) {
+  document.querySelectorAll(".ln-checkbox").forEach(cb => { cb.checked = checked; });
+  updateLnBtnLabel();
+}
+
+function updateLnBtnLabel() {
+  const n = document.querySelectorAll(".ln-checkbox:checked").length;
+  document.getElementById("analyzeLnBtn").textContent =
+    `Analyze ${n} Selected Job${n !== 1 ? "s" : ""}`;
+}
+
+async function analyzeLnJobs() {
+  const selected = [...document.querySelectorAll(".ln-checkbox:checked")]
+    .map(cb => lnFetchedJobs[parseInt(cb.dataset.idx)]);
+  if (!selected.length) return;
+
+  const errEl = document.getElementById("lnError");
+  errEl.classList.add("hidden");
+  const btn = document.getElementById("analyzeLnBtn");
+  btn.disabled = true;
+
+  const progressEl  = document.getElementById("lnProgress");
+  const progressBar = document.getElementById("lnProgressBar");
+  const progressTxt = document.getElementById("lnProgressText");
+  progressEl.classList.remove("hidden");
+  progressBar.style.width = "0%";
+  progressTxt.textContent = `Starting — 0 / ${selected.length} done`;
+
+  try {
+    const startRes = await fetch("/linkedin/start-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: selected.map(j => j.url) }),
+    });
+    const { batch_id } = await startRes.json();
+
+    const total = selected.length;
+    let done = 0;
+
+    await new Promise((resolve, reject) => {
+      const evtSrc = new EventSource(`/linkedin/batch-stream/${batch_id}`);
+
+      evtSrc.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.status === "ping") return;
+        if (msg.status === "analyzing") {
+          progressTxt.textContent = `Analyzing ${done + 1} / ${total}…`;
+        } else if (msg.status === "done") {
+          done++;
+          progressBar.style.width = `${(done / total) * 100}%`;
+          progressTxt.textContent = `${done} / ${total} done — ${msg.result.title} at ${msg.result.company}`;
+          refreshHistory(msg.result);
+        } else if (msg.status === "error") {
+          done++;
+          progressBar.style.width = `${(done / total) * 100}%`;
+          progressTxt.textContent = `${done} / ${total} — error on one job (skipped)`;
+        } else if (msg.status === "complete") {
+          evtSrc.close();
+          progressTxt.textContent = `All ${total} jobs analyzed. Results added to history below.`;
+          resolve();
+        }
+      };
+      evtSrc.onerror = () => { evtSrc.close(); reject(new Error("Stream lost")); };
+    });
+  } catch (err) {
+    errEl.textContent = "Batch analysis failed: " + err.message;
+    errEl.classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
+    updateLnBtnLabel();
+  }
 }
 </script>
 </body>
