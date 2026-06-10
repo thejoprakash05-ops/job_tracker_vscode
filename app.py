@@ -445,59 +445,89 @@ def _chrome_aes_key() -> bytes:
 
 def _decrypt_cookie_value(key: bytes, enc_val: bytes) -> str:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    # v10/v11: 3-byte tag + 12-byte IV + ciphertext+tag
     return AESGCM(key).decrypt(enc_val[3:15], enc_val[15:], None).decode("utf-8", errors="replace")
 
 
+def _chrome_profile_dirs() -> list[Path]:
+    """All Chrome profile dirs, sorted most-recently-used first."""
+    base = Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"
+    if not base.exists():
+        return []
+    ls = base / "Local State"
+    profiles: list[Path] = []
+    if ls.exists():
+        try:
+            info = json.loads(ls.read_text(encoding="utf-8")).get("profile", {}).get("info_cache", {})
+            for name in sorted(info, key=lambda k: info[k].get("active_time", 0), reverse=True):
+                d = base / name
+                if d.exists():
+                    profiles.append(d)
+        except Exception:
+            pass
+    if not profiles:
+        profiles = [d for d in base.iterdir() if d.is_dir()]
+    return profiles
+
+
 def _extract_chrome_linkedin_cookies() -> dict:
-    base = Path(os.environ["LOCALAPPDATA"]) / "Google" / "Chrome" / "User Data"
-    db_path = None
-    for profile in ("Default", "Profile 1", "Profile 2"):
-        for sub in ("Network", ""):
-            p = base / profile / sub / "Cookies" if sub else base / profile / "Cookies"
-            if p.exists():
-                db_path = p
-                break
-        if db_path:
-            break
-    if not db_path:
-        raise FileNotFoundError("Chrome Cookies database not found. Is Chrome installed?")
+    profiles = _chrome_profile_dirs()
+    if not profiles:
+        raise FileNotFoundError("Chrome profile directories not found. Is Chrome installed?")
 
     key = _chrome_aes_key()
 
-    # Copy to temp so we don't hit Chrome's file lock
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as _f:
-        tmp = Path(_f.name)
-    shutil.copy2(db_path, tmp)
-    for ext in ("-wal", "-shm"):
-        src = db_path.with_name(db_path.name + ext)
-        if src.exists():
-            shutil.copy2(src, tmp.with_name(tmp.name + ext))
-
-    try:
-        con  = sqlite3.connect(str(tmp))
-        rows = con.execute(
-            "SELECT name, value, encrypted_value FROM cookies "
-            "WHERE host_key LIKE '%linkedin.com' AND name IN ('li_at', 'JSESSIONID')"
-        ).fetchall()
-        con.close()
-    finally:
-        for ext in ("", "-wal", "-shm"):
-            p = tmp.with_name(tmp.name + ext)
+    for profile_dir in profiles:
+        db_path = None
+        for sub in ("Network", ""):
+            p = profile_dir / sub / "Cookies" if sub else profile_dir / "Cookies"
             if p.exists():
-                try: p.unlink()
-                except OSError: pass
+                db_path = p
+                break
+        if not db_path:
+            continue
 
-    result = {}
-    for name, value, enc_val in rows:
-        if value:
-            result[name] = value
-        elif enc_val and enc_val[:3] in (b"v10", b"v11"):
-            try:
-                result[name] = _decrypt_cookie_value(key, enc_val)
-            except Exception:
-                pass
-    return result
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as _f:
+            tmp = Path(_f.name)
+
+        try:
+            shutil.copy2(db_path, tmp)
+        except (PermissionError, OSError) as exc:
+            tmp.unlink(missing_ok=True)
+            raise PermissionError(str(exc)) from exc
+
+        try:
+            con  = sqlite3.connect(str(tmp))
+            rows = con.execute(
+                "SELECT name, value, encrypted_value FROM cookies "
+                "WHERE host_key LIKE '%linkedin.com' AND name IN ('li_at', 'JSESSIONID')"
+            ).fetchall()
+            con.close()
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            continue
+        finally:
+            for ext in ("", "-wal", "-shm"):
+                p2 = tmp.with_name(tmp.name + ext)
+                if p2.exists():
+                    try: p2.unlink()
+                    except OSError: pass
+
+        result: dict = {}
+        for name, value, enc_val in rows:
+            if value:
+                result[name] = value
+            elif enc_val and enc_val[:3] in (b"v10", b"v11"):
+                try:
+                    result[name] = _decrypt_cookie_value(key, enc_val)
+                except Exception:
+                    pass
+
+        if result.get("li_at"):
+            return result
+
+    raise FileNotFoundError(
+        "LinkedIn cookies not found in any Chrome profile. Make sure you're logged into LinkedIn in Chrome."
+    )
 
 
 def _update_env_file(key: str, value: str) -> None:
@@ -524,10 +554,32 @@ def _update_env_file(key: str, value: str) -> None:
 # Routes
 # ---------------------------------------------------------------------------
 
+def _chrome_is_running() -> bool:
+    import subprocess
+    out = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"],
+        capture_output=True, text=True,
+    ).stdout
+    return "chrome.exe" in out.lower()
+
+
 @app.route("/linkedin/extract-cookies")
 def linkedin_extract_cookies():
+    import subprocess, time
+
+    if request.args.get("close_chrome") == "1":
+        subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True)
+        time.sleep(2)
+
     try:
         cookies = _extract_chrome_linkedin_cookies()
+    except PermissionError:
+        if _chrome_is_running():
+            return jsonify({
+                "error": "Chrome is open and locking the cookies database.",
+                "chrome_running": True,
+            }), 409
+        return jsonify({"error": "Permission denied reading Chrome cookies."}), 500
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:

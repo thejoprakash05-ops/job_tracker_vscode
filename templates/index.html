@@ -676,25 +676,42 @@ async function copyToClipboard(text, btnId) {
   }
 })();
 
-async function detectChromeCookies() {
+async function detectChromeCookies(closeChrome = false) {
   const btn    = document.getElementById("detectCookiesBtn");
   const status = document.getElementById("detectStatus");
   const errEl  = document.getElementById("lnError");
   errEl.classList.add("hidden");
-  btn.disabled = true; btn.textContent = "Detecting…";
+  btn.disabled = true;
+  btn.textContent = closeChrome ? "Closing Chrome & detecting…" : "Detecting…";
   status.textContent = "";
+
+  if (closeChrome && !confirm("This will close all Chrome windows. Continue?")) {
+    btn.disabled = false; btn.textContent = "🔍 Auto-detect from Chrome";
+    return;
+  }
+
   try {
-    const res  = await fetch("/linkedin/extract-cookies");
+    const url = "/linkedin/extract-cookies" + (closeChrome ? "?close_chrome=1" : "");
+    const res  = await fetch(url);
     const data = await res.json();
+
+    if (res.status === 409 && data.chrome_running) {
+      errEl.innerHTML =
+        "Chrome is open and locking the cookies. " +
+        "<button class='btn-link' style='text-decoration:underline' " +
+        "onclick='detectChromeCookies(true)'>Close Chrome &amp; Detect</button>";
+      errEl.classList.remove("hidden");
+      return;
+    }
     if (data.error) {
       errEl.textContent = data.error;
       errEl.classList.remove("hidden");
-      status.textContent = "";
       return;
     }
     if (data.li_at)      document.getElementById("liAt").value       = data.li_at;
     if (data.jsessionid) document.getElementById("jsessionId").value = data.jsessionid;
     status.textContent = "✓ Detected and saved to .env";
+    errEl.classList.add("hidden");
   } catch (err) {
     errEl.textContent = "Detection failed: " + err.message;
     errEl.classList.remove("hidden");
