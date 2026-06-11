@@ -787,6 +787,15 @@ def job_data(folder: str):
     })
 
 
+@app.route("/jobs/<folder>/delete", methods=["POST"])
+def delete_job(folder: str):
+    db.delete_job(DB_PATH, folder)
+    job_dir = JOBS_DIR / folder
+    if job_dir.exists():
+        shutil.rmtree(str(job_dir))
+    return jsonify({"success": True})
+
+
 @app.route("/jobs/<folder>/download/<filename>")
 def download_file(folder: str, filename: str):
     allowed = {

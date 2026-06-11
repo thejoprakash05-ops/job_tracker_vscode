@@ -35,43 +35,52 @@
             <label for="url">Job Posting URL</label>
             <input id="url" name="url" type="url"
               placeholder="https://www.linkedin.com/jobs/... or any job board URL" />
-            <span class="hint">Works with most job boards. If a site blocks scraping, paste the JD below.</span>
+            <span class="hint">Works with most job boards. If a site blocks scraping, expand Optional settings below and paste the JD.</span>
           </div>
         </div>
 
-        <div class="form-row two-col">
-          <div class="form-group">
-            <label for="company">Company <span class="optional">(optional override)</span></label>
-            <input id="company" name="company" type="text" placeholder="Auto-detected from URL" />
-          </div>
-          <div class="form-group">
-            <label for="jobTitle">Job Title <span class="optional">(optional override)</span></label>
-            <input id="jobTitle" name="job_title" type="text" placeholder="Auto-detected from URL" />
-          </div>
-        </div>
+        <details class="optional-fields-details">
+          <summary>
+            Optional settings
+            <span class="optional-toggle-hint">— overrides, resume, JD paste, cover template</span>
+          </summary>
+          <div class="optional-fields-body">
 
-        <div class="form-row">
-          <div class="form-group full">
-            <label for="resumeFile">Resume <span class="optional">(.md, .txt, or .pdf — leave empty to use base resume)</span></label>
-            <input type="file" id="resumeFile" name="resume_file" accept=".md,.txt,.pdf" class="file-input" />
-            <span class="hint" id="resumeFileHint">No file selected — base resume will be used.</span>
-          </div>
-        </div>
+            <div class="form-row two-col">
+              <div class="form-group">
+                <label for="company">Company <span class="optional">(override)</span></label>
+                <input id="company" name="company" type="text" placeholder="Auto-detected from URL" />
+              </div>
+              <div class="form-group">
+                <label for="jobTitle">Job Title <span class="optional">(override)</span></label>
+                <input id="jobTitle" name="job_title" type="text" placeholder="Auto-detected from URL" />
+              </div>
+            </div>
 
-        <details class="manual-jd-details">
-          <summary>Paste job description manually (for LinkedIn, gated sites, or PDF JDs)</summary>
-          <div class="form-group" style="margin-top:0.75rem">
-            <textarea id="manualJD" name="manual_jd" rows="8"
-              placeholder="Paste the full job description text here..."></textarea>
-          </div>
-        </details>
+            <div class="form-row">
+              <div class="form-group full">
+                <label for="resumeFile">Resume <span class="optional">(.md, .txt, or .pdf — leave empty to use base resume)</span></label>
+                <input type="file" id="resumeFile" name="resume_file" accept=".md,.txt,.pdf" class="file-input" />
+                <span class="hint" id="resumeFileHint">No file selected — base resume will be used.</span>
+              </div>
+            </div>
 
-        <details class="upload-details">
-          <summary>Upload cover letter template <span class="optional">(optional)</span></summary>
-          <div class="form-group" style="margin-top:0.75rem">
-            <label for="coverTemplateFile">Cover letter template <span class="optional">(.md or .txt)</span></label>
-            <input type="file" id="coverTemplateFile" name="cover_template_file" accept=".md,.txt" class="file-input" />
-            <span class="hint">Claude will preserve your structure and style while updating content for this role.</span>
+            <div class="form-row">
+              <div class="form-group full">
+                <label for="manualJD">Paste job description <span class="optional">(for LinkedIn, gated sites, or PDF JDs)</span></label>
+                <textarea id="manualJD" name="manual_jd" rows="8"
+                  placeholder="Paste the full job description text here..."></textarea>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group full">
+                <label for="coverTemplateFile">Cover letter template <span class="optional">(.md or .txt)</span></label>
+                <input type="file" id="coverTemplateFile" name="cover_template_file" accept=".md,.txt" class="file-input" />
+                <span class="hint">Claude will preserve your structure and style while updating content for this role.</span>
+              </div>
+            </div>
+
           </div>
         </details>
 
@@ -271,6 +280,7 @@
     <div class="jobs-grid">
       {% for job in jobs %}
       <div class="job-card" data-folder="{{ job.folder }}" title="Click to view results">
+        <button class="btn-delete-job" onclick="deleteJob(event,'{{ job.folder }}')" title="Delete application">&#10005;</button>
         <div class="job-card-score
           {% if job.match_percentage >= 80 %} score-high
           {% elif job.match_percentage >= 60 %} score-mid
@@ -563,7 +573,9 @@ function refreshHistory(data) {
   const cls = pct >= 80 ? "score-high" : pct >= 60 ? "score-mid" : "score-low";
   const card = document.createElement("div");
   card.className = "job-card new-card";
+  card.dataset.folder = data.folder;
   card.innerHTML = `
+    <button class="btn-delete-job" onclick="deleteJob(event,'${data.folder}')" title="Delete application">&#10005;</button>
     <div class="job-card-score ${cls}">${pct}%</div>
     <div class="job-card-info">
       <p class="job-card-title">${escHtml(data.title)}</p>
@@ -634,6 +646,39 @@ async function loadJobData(folder) {
   } finally {
     btn.disabled = false;
     btn.textContent = "Analyze & Optimize";
+  }
+}
+
+// ── Delete application ────────────────────────────────────────────────────
+async function deleteJob(e, folder) {
+  e.stopPropagation();
+  if (!confirm('Delete this application? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/jobs/${folder}/delete`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const card = document.querySelector(`.job-card[data-folder="${folder}"]`);
+    if (card) {
+      card.style.transition = 'opacity .2s, transform .2s';
+      card.style.opacity = '0';
+      card.style.transform = 'scale(0.96)';
+      setTimeout(() => {
+        card.remove();
+        const grid = document.querySelector('.jobs-grid');
+        if (grid && !grid.children.length) {
+          grid.remove();
+          const p = document.createElement('p');
+          p.className = 'empty-state';
+          p.textContent = 'No applications analyzed yet. Submit a job URL above to get started.';
+          document.getElementById('historySection').appendChild(p);
+        }
+      }, 200);
+    }
+    if (currentFolder === folder) {
+      resultsSection.classList.add('hidden');
+      currentFolder = null;
+    }
+  } catch (err) {
+    showError('Failed to delete: ' + err.message);
   }
 }
 

@@ -135,6 +135,35 @@ input:focus, textarea:focus {
 textarea { resize: vertical; min-height: 140px; }
 .hint { font-size: .8rem; color: var(--muted); }
 
+.optional-fields-details {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: .6rem 1rem;
+  margin-bottom: 1rem;
+}
+.optional-fields-details summary {
+  cursor: pointer;
+  font-size: .9rem;
+  color: var(--primary);
+  font-weight: 500;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.optional-fields-details summary::-webkit-details-marker { display: none; }
+.optional-fields-details summary::before {
+  content: '▶';
+  font-size: .6rem;
+  display: inline-block;
+  transition: transform .2s;
+}
+.optional-fields-details[open] summary::before { transform: rotate(90deg); }
+.optional-fields-details[open] summary { margin-bottom: .75rem; }
+.optional-toggle-hint { color: var(--muted); font-weight: 400; font-size: .82rem; }
+.optional-fields-body { display: flex; flex-direction: column; gap: 0; }
+
 .manual-jd-details,
 .upload-details {
   border: 1px dashed var(--border);
@@ -474,6 +503,7 @@ textarea { resize: vertical; min-height: 140px; }
   gap: .75rem;
 }
 .job-card {
+  position: relative;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -486,6 +516,27 @@ textarea { resize: vertical; min-height: 140px; }
 }
 .job-card[data-folder] { cursor: pointer; }
 .job-card:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
+
+.btn-delete-job {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 24px; height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity .15s, background .15s, color .15s;
+}
+.job-card:hover .btn-delete-job { opacity: 1; }
+.btn-delete-job:hover { background: var(--red-lt); color: var(--red); }
 .job-card.new-card { animation: slideIn .35s ease; }
 @keyframes slideIn { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: none; } }
 

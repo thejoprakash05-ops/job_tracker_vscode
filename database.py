@@ -151,6 +151,11 @@ def set_skill_cache(db_path: Path, skill: str, html: str) -> None:
         )
 
 
+def delete_job(db_path: Path, folder: str) -> None:
+    with _conn(db_path) as con:
+        con.execute("DELETE FROM jobs WHERE folder = ?", (folder,))
+
+
 def upsert_has_pdf(db_path: Path, folder: str) -> None:
     with _conn(db_path) as con:
         con.execute(
