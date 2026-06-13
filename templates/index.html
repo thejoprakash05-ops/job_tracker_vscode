@@ -22,6 +22,15 @@
 
 <main>
 
+  <!-- ── PAGE-LEVEL TABS ──────────────────────────────────────────── -->
+  <div class="page-tab-bar">
+    <button class="page-tab active" data-pane="singleJob">Single Job</button>
+    <button class="page-tab" data-pane="discoverJobs">Discover Jobs</button>
+  </div>
+
+  <!-- ══════════════ SINGLE JOB PANE ══════════════ -->
+  <div id="singleJobPane">
+
   <!-- ── INPUT CARD ────────────────────────────────────────────────── -->
   <section id="inputSection">
     <div class="card">
@@ -310,6 +319,87 @@
     <p class="empty-state">No applications analyzed yet. Submit a job URL above to get started.</p>
     {% endif %}
   </section>
+
+  </div><!-- end #singleJobPane -->
+
+  <!-- ══════════════ DISCOVER JOBS PANE ══════════════ -->
+  <div id="discoverJobsPane" class="hidden">
+
+    <!-- Search form -->
+    <section>
+      <div class="card">
+        <h2 class="card-title">Discover Matching Jobs</h2>
+        <p class="card-sub">Search Adzuna for open positions and auto-rank them against your resume. Positions ≥ 70% get a tailored resume and cover letter generated automatically.</p>
+
+        <div class="form-row">
+          <div style="display:flex;align-items:center;gap:1rem;margin-bottom:.5rem">
+            <label style="margin:0">Positions to Search</label>
+            <button type="button" class="btn-link" onclick="azSelectAll(true)">Select All</button>
+            <button type="button" class="btn-link" onclick="azSelectAll(false)">Deselect All</button>
+          </div>
+          <div class="title-checks-grid">
+            <label><input type="checkbox" class="az-title-check" value="Software Engineering Manager" checked /> Software Engineering Manager</label>
+            <label><input type="checkbox" class="az-title-check" value="Senior Software Engineering Manager" checked /> Senior Software Engineering Manager</label>
+            <label><input type="checkbox" class="az-title-check" value="Software Engineering Director" checked /> Software Engineering Director</label>
+            <label><input type="checkbox" class="az-title-check" value="Senior Software Engineering Director" checked /> Senior Software Engineering Director</label>
+            <label><input type="checkbox" class="az-title-check" value="Director of Engineering" checked /> Director of Engineering</label>
+            <label><input type="checkbox" class="az-title-check" value="VP of Engineering" checked /> VP of Engineering</label>
+            <label><input type="checkbox" class="az-title-check" value="VP Software Engineering" checked /> VP Software Engineering</label>
+            <label><input type="checkbox" class="az-title-check" value="Principal Software Engineer" checked /> Principal Software Engineer</label>
+            <label><input type="checkbox" class="az-title-check" value="Engineering Manager" checked /> Engineering Manager</label>
+            <label><input type="checkbox" class="az-title-check" value="Engineering Director" checked /> Engineering Director</label>
+          </div>
+        </div>
+
+        <div class="form-row two-col" style="margin-top:1rem">
+          <div class="form-group">
+            <label for="azLocation">Location</label>
+            <input type="text" id="azLocation" value="San Francisco Bay Area" placeholder="City, state, or region" />
+          </div>
+          <div class="form-group">
+            <label for="azCompany">Company <span class="optional">(leave blank for all)</span></label>
+            <input type="text" id="azCompany" placeholder="e.g. Google, Meta" />
+          </div>
+        </div>
+
+        <div class="form-row two-col">
+          <div class="form-group">
+            <label for="azDays">Posted within <span class="optional">(days, default 7)</span></label>
+            <input type="number" id="azDays" value="7" min="1" max="90" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group full">
+            <label for="azResumeFile">Resume <span class="optional">(.md, .txt, or .pdf — leave empty to use base resume)</span></label>
+            <input type="file" id="azResumeFile" accept=".md,.txt,.pdf" class="file-input" />
+            <span class="hint" id="azResumeHint">No file selected — base_resume_2.md will be used.</span>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" id="azSearchBtn" class="btn-primary" onclick="startAdzunaSearch()">Search Adzuna</button>
+          <button type="button" id="azStopBtn" class="btn-secondary hidden" onclick="stopAdzunaSearch()">Stop</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Progress -->
+    <section id="azProgressSection" class="hidden">
+      <div class="card" style="padding:1.25rem 2rem">
+        <div class="ln-progress-bar-bg"><div id="azProgressBar" class="ln-progress-bar"></div></div>
+        <p id="azProgressText" class="ln-progress-text" style="margin-top:.5rem"></p>
+        <div id="azError" class="error-banner hidden" style="margin-top:.75rem"></div>
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section id="azResultsSection" class="hidden">
+      <h2 class="section-heading">Discovered Jobs <span id="azResultCount" style="font-weight:400"></span></h2>
+      <div id="azJobsGrid" class="jobs-grid"></div>
+    </section>
+
+  </div><!-- end #discoverJobsPane -->
 
 </main>
 
@@ -712,6 +802,195 @@ async function copyToClipboard(text, btnId) {
   const orig = btn.textContent;
   btn.textContent = "✓ Copied!";
   setTimeout(() => { btn.textContent = orig; }, 2000);
+}
+
+// ── Page-level tab switching ─────────────────────────────────────────────
+document.querySelectorAll(".page-tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".page-tab").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    const pane = btn.dataset.pane;
+    document.getElementById("singleJobPane").classList.toggle("hidden", pane !== "singleJob");
+    document.getElementById("discoverJobsPane").classList.toggle("hidden", pane !== "discoverJobs");
+  });
+});
+
+// ── Discover tab: resume file hint ───────────────────────────────────────
+document.getElementById("azResumeFile").addEventListener("change", (e) => {
+  document.getElementById("azResumeHint").textContent = e.target.files[0]
+    ? `Selected: ${e.target.files[0].name}`
+    : "No file selected — base_resume_2.md will be used.";
+});
+
+// ── Adzuna title checkboxes ───────────────────────────────────────────────
+function azSelectAll(checked) {
+  document.querySelectorAll(".az-title-check").forEach(cb => { cb.checked = checked; });
+}
+
+// ── Adzuna search ─────────────────────────────────────────────────────────
+let azEvtSrc = null;
+
+function stopAdzunaSearch() {
+  if (azEvtSrc) { azEvtSrc.close(); azEvtSrc = null; }
+  const searchBtn = document.getElementById("azSearchBtn");
+  const stopBtn   = document.getElementById("azStopBtn");
+  const progressText = document.getElementById("azProgressText");
+  searchBtn.disabled = false;
+  searchBtn.textContent = "Search Adzuna";
+  stopBtn.classList.add("hidden");
+  progressText.textContent = "Search stopped.";
+}
+
+async function startAdzunaSearch() {
+  const titles = [...document.querySelectorAll(".az-title-check:checked")].map(cb => cb.value);
+  if (!titles.length) {
+    alert("Please select at least one position title.");
+    return;
+  }
+
+  const company = document.getElementById("azCompany").value.trim();
+  const days    = parseInt(document.getElementById("azDays").value) || 7;
+
+  let resumeText = "";
+  const fileInput = document.getElementById("azResumeFile");
+  if (fileInput.files[0]) {
+    resumeText = await readFileAsText(fileInput.files[0]);
+  }
+
+  const searchBtn      = document.getElementById("azSearchBtn");
+  const progressSec    = document.getElementById("azProgressSection");
+  const progressBar    = document.getElementById("azProgressBar");
+  const progressText   = document.getElementById("azProgressText");
+  const azError        = document.getElementById("azError");
+  const resultsSec     = document.getElementById("azResultsSection");
+  const azJobsGrid     = document.getElementById("azJobsGrid");
+  const azResultCount  = document.getElementById("azResultCount");
+
+  searchBtn.disabled = true;
+  searchBtn.textContent = "Searching…";
+  document.getElementById("azStopBtn").classList.remove("hidden");
+  progressSec.classList.remove("hidden");
+  progressBar.style.width = "0%";
+  progressText.textContent = "Fetching jobs from Adzuna…";
+  azError.classList.add("hidden");
+  resultsSec.classList.remove("hidden");
+  azJobsGrid.innerHTML = "";
+  azResultCount.textContent = "";
+
+  try {
+    const startRes = await fetch("/adzuna/start-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ titles, company, days, location: document.getElementById("azLocation").value.trim(), resume_text: resumeText }),
+    });
+    const startData = await startRes.json();
+    if (startData.error) {
+      azError.textContent = startData.error;
+      azError.classList.remove("hidden");
+      return;
+    }
+
+    const { batch_id } = startData;
+    let total = 0, done = 0, highMatch = 0;
+
+    await new Promise((resolve, reject) => {
+      azEvtSrc = new EventSource(`/adzuna/batch-stream/${batch_id}`);
+      const evtSrc = azEvtSrc;
+
+      evtSrc.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.status === "ping") return;
+
+        if (msg.status === "portal_check") {
+          progressText.textContent = `No Adzuna results — checking ${escHtml(msg.company)} career portal…`;
+
+        } else if (msg.status === "fetched") {
+          total = msg.total;
+          const srcNote = msg.source === "career_portal"
+            ? ` (from ${escHtml(msg.company)} careers page)` : "";
+          progressText.textContent = total > 0
+            ? `Found ${total} positions${srcNote} — scoring matches…`
+            : "No positions found. Try different titles or a longer time window.";
+          if (total === 0) { evtSrc.close(); resolve(); }
+
+        } else if (msg.status === "analyzing") {
+          progressText.textContent = `Analyzing ${msg.index} / ${total}: ${escHtml(msg.title)} at ${escHtml(msg.company)}…`;
+
+        } else if (msg.status === "done") {
+          done++;
+          if (msg.result.has_full_data) highMatch++;
+          progressBar.style.width = `${(done / total) * 100}%`;
+          progressText.textContent = `${done} / ${total} analyzed`;
+          addAdzunaResultCard(msg.result);
+          azResultCount.textContent = `— ${done} found`;
+
+        } else if (msg.status === "error") {
+          done++;
+          progressBar.style.width = `${(done / total) * 100}%`;
+
+        } else if (msg.status === "complete") {
+          evtSrc.close();
+          progressText.textContent =
+            `Done — ${msg.total} scanned, ${msg.high_match} strong match${msg.high_match !== 1 ? "es" : ""} (≥ 70%).`;
+          azResultCount.textContent = `— ${done} found`;
+          resolve();
+        }
+      };
+      evtSrc.onerror = () => { evtSrc.close(); reject(new Error("Stream lost")); };
+    });
+
+  } catch (err) {
+    if (azEvtSrc) { azError.textContent = "Search failed: " + err.message; azError.classList.remove("hidden"); }
+  } finally {
+    azEvtSrc = null;
+    searchBtn.disabled = false;
+    searchBtn.textContent = "Search Adzuna";
+    document.getElementById("azStopBtn").classList.add("hidden");
+  }
+}
+
+function addAdzunaResultCard(result) {
+  const pct  = result.match_percentage || 0;
+  const cls  = pct >= 80 ? "score-high" : pct >= 60 ? "score-mid" : "score-low";
+  const full = result.has_full_data;
+  const grid = document.getElementById("azJobsGrid");
+
+  const card = document.createElement("div");
+  card.className = "job-card new-card" + (full ? "" : " az-low-match");
+  card.dataset.folder = result.folder;
+
+  const badge = full
+    ? `<span class="az-full-badge">Resume + Cover generated</span>`
+    : `<span class="az-low-badge">Score only (&lt; 70%)</span>`;
+
+  const links = full
+    ? `<a href="/jobs/${result.folder}/download/tailored_resume.md" class="link-dl">Resume</a>
+       <a href="/jobs/${result.folder}/download/cover_letter.md" class="link-dl">Cover</a>
+       <a href="/jobs/${result.folder}/download/job_description.md" class="link-dl">JD</a>`
+    : `<a href="/jobs/${result.folder}/download/job_description.md" class="link-dl">JD</a>`;
+
+  card.innerHTML = `
+    <div class="job-card-score ${cls}">${pct}%</div>
+    <div class="job-card-info">
+      <p class="job-card-title">${escHtml(result.title)}</p>
+      <p class="job-card-company">${escHtml(result.company)}</p>
+      ${result.location ? `<p class="job-card-location">${escHtml(result.location)}</p>` : ""}
+      ${badge}
+    </div>
+    <div class="job-card-links">${links}</div>`;
+
+  // Insert sorted by match score descending
+  const existing = [...grid.querySelectorAll(".job-card")];
+  const before   = existing.find(c => parseInt(c.querySelector(".job-card-score").textContent) < pct);
+  before ? grid.insertBefore(card, before) : grid.appendChild(card);
+}
+
+function readFileAsText(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    reader.readAsText(file);
+  });
 }
 
 // ── LinkedIn: pre-fill from saved .env values ────────────────────────────

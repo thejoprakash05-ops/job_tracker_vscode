@@ -24,6 +24,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+ADZUNA_APP_ID  = os.getenv("ADZUNA_APP_ID",  "")
+ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "")
+
 BASE_DIR = Path(__file__).parent
 
 # JOBS_DIR is configurable via .env — relative paths are resolved from BASE_DIR
@@ -838,6 +841,393 @@ def download_file(folder: str, filename: str):
     return send_from_directory(d, filename, as_attachment=True)
 
 
+# ---------------------------------------------------------------------------
+# Adzuna batch discovery
+# ---------------------------------------------------------------------------
+
+def fetch_adzuna_jobs(titles: list, company: str, days: int, location: str = "") -> list:
+    """Query Adzuna for each title; deduplicate by job id."""
+    jobs = []
+    seen_ids: set = set()
+    for title in titles:
+        params = {
+            "app_id":       ADZUNA_APP_ID,
+            "app_key":      ADZUNA_APP_KEY,
+            "what":         title,
+            "max_days_old": days,
+            "results_per_page": 20,
+        }
+        if company:
+            params["company"] = company
+        if location:
+            params["where"] = location
+        try:
+            resp = requests.get(
+                "https://api.adzuna.com/v1/api/jobs/us/search/1",
+                params=params, timeout=15,
+            )
+            resp.raise_for_status()
+            for job in resp.json().get("results", []):
+                jid = job.get("id")
+                if not jid or jid in seen_ids:
+                    continue
+                seen_ids.add(jid)
+                jobs.append({
+                    "id":          jid,
+                    "title":       job.get("title", ""),
+                    "company":     job.get("company", {}).get("display_name", ""),
+                    "location":    job.get("location", {}).get("display_name", ""),
+                    "description": job.get("description", ""),
+                    "url":         job.get("redirect_url", ""),
+                })
+        except Exception as e:
+            print(f"[adzuna] error fetching '{title}': {e}")
+    return jobs
+
+
+_JOB_CTA_RE = re.compile(
+    r"(explore|view|see|find|browse|search|all|check out|open)\s*(jobs?|roles?|positions?|openings?|careers?|opportunities?)"
+    r"|jobs?\s*(available|open|listing|board)"
+    r"|(open|current)\s*(positions?|roles?|openings?)",
+    re.IGNORECASE,
+)
+
+def _find_jobs_page_url(html: str, base_url: str) -> str | None:
+    """Find the actual job listing URL from a career landing page by following CTA links/buttons."""
+    from urllib.parse import urljoin
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Check anchor text and aria-label
+    for tag in soup.find_all("a", href=True):
+        text = tag.get_text(" ", strip=True) or tag.get("aria-label", "")
+        href = tag["href"]
+        if href.startswith("#") or not href:
+            continue
+        if _JOB_CTA_RE.search(text):
+            return urljoin(base_url, href)
+
+    # Also match hrefs that look like job-listing paths
+    for tag in soup.find_all("a", href=True):
+        href = tag["href"]
+        if any(kw in href.lower() for kw in ["/jobs", "/open-positions", "/openings", "/careers/jobs", "/work-with-us"]):
+            if not href.startswith("#"):
+                return urljoin(base_url, href)
+
+    return None
+
+
+_MGMT_KEYWORDS = {
+    "engineer", "engineering", "manager", "director", "vp", "vice president",
+    "head", "lead", "principal", "architect", "staff", "senior", "leadership",
+}
+
+
+def _filter_portal_jobs(all_jobs: list, titles: list) -> list:
+    """Return jobs matching the requested titles; fall back to all eng/mgmt roles."""
+    title_words: set = set()
+    for t in titles:
+        title_words.update(t.lower().split())
+    title_words -= {"of", "and", "the", "a", "an", "software"}
+
+    preferred = [j for j in all_jobs if any(w in j["title"].lower() for w in title_words)]
+    if preferred:
+        return preferred
+
+    # No keyword match — return all engineering / management / leadership roles
+    fallback = [j for j in all_jobs if any(w in j["title"].lower() for w in _MGMT_KEYWORDS)]
+    return fallback if fallback else all_jobs
+
+
+def fetch_career_portal_jobs(company: str, titles: list, client: anthropic.Anthropic) -> list:
+    """Fallback: fetch jobs from the company career portal when Adzuna returns nothing."""
+
+    # Ask Claude Haiku for ATS type, slug, and direct URL
+    info_resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"For the company '{company}', provide their job board details.\n"
+                "Reply as JSON with these fields:\n"
+                "  ats: \"greenhouse\" | \"lever\" | \"other\"\n"
+                "  slug: their slug/identifier on that ATS (e.g. \"anthropic\")\n"
+                "  url: their direct careers page URL\n"
+                "Use null for unknown fields. Return only valid JSON."
+            )
+        }]
+    )
+    info_text = info_resp.content[0].text.strip()
+    print(f"[career-portal] ATS info for {company}: {info_text}")
+
+    try:
+        info = json.loads(info_text)
+    except Exception:
+        m = re.search(r"\{[\s\S]*\}", info_text)
+        info = json.loads(m.group()) if m else {}
+
+    ats        = (info.get("ats") or "").lower()
+    slug       = (info.get("slug") or "").strip()
+    portal_url = (info.get("url") or "").strip()
+
+    all_jobs: list = []
+
+    # ── Greenhouse JSON API ──────────────────────────────────────────────────
+    if ats == "greenhouse" and slug:
+        api_url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+        print(f"[career-portal] Greenhouse API: {api_url}")
+        try:
+            resp = requests.get(api_url, params={"content": "true"}, timeout=15)
+            print(f"[career-portal] Greenhouse status: {resp.status_code}")
+            if resp.status_code == 200:
+                for j in resp.json().get("jobs", []):
+                    offices = ", ".join(o["name"] for o in j.get("offices", []))
+                    raw_desc = BeautifulSoup(j.get("content", ""), "html.parser").get_text()[:500]
+                    all_jobs.append({
+                        "id":          f"gh_{j['id']}",
+                        "title":       j.get("title", ""),
+                        "company":     company,
+                        "location":    offices,
+                        "description": raw_desc,
+                        "url":         j.get("absolute_url", ""),
+                    })
+                print(f"[career-portal] Greenhouse total jobs: {len(all_jobs)}")
+        except Exception as e:
+            print(f"[career-portal] Greenhouse API error: {e}")
+
+    # ── Lever JSON API ───────────────────────────────────────────────────────
+    elif ats == "lever" and slug:
+        api_url = f"https://api.lever.co/v0/postings/{slug}"
+        print(f"[career-portal] Lever API: {api_url}")
+        try:
+            resp = requests.get(api_url, params={"mode": "json"}, timeout=15)
+            print(f"[career-portal] Lever status: {resp.status_code}")
+            if resp.status_code == 200:
+                for j in resp.json():
+                    all_jobs.append({
+                        "id":          f"lever_{j.get('id', '')}",
+                        "title":       j.get("text", ""),
+                        "company":     company,
+                        "location":    j.get("categories", {}).get("location", ""),
+                        "description": j.get("descriptionPlain", "")[:500],
+                        "url":         j.get("hostedUrl", ""),
+                    })
+                print(f"[career-portal] Lever total jobs: {len(all_jobs)}")
+        except Exception as e:
+            print(f"[career-portal] Lever API error: {e}")
+
+    # ── Scrape fallback ──────────────────────────────────────────────────────
+    if not all_jobs and portal_url and portal_url.startswith("http"):
+        print(f"[career-portal] Scraping {portal_url}")
+        try:
+            raw_resp = requests.get(portal_url, headers=_HEADERS, timeout=20)
+            raw_resp.raise_for_status()
+            raw_html = raw_resp.text
+
+            # Follow CTA links ("Explore Jobs", "View openings", etc.) if the page looks like a landing page
+            soup_landing = BeautifulSoup(raw_html, "html.parser")
+            page_text = _soup_to_text(soup_landing)
+            print(f"[career-portal] Landing page text length: {len(page_text)}")
+
+            if len(page_text.strip()) < 1000:
+                cta_url = _find_jobs_page_url(raw_html, portal_url)
+                if cta_url and cta_url != portal_url:
+                    print(f"[career-portal] Following CTA link: {cta_url}")
+                    try:
+                        page_text = fetch_page_text(cta_url)
+                        print(f"[career-portal] CTA page text length: {len(page_text)}")
+                    except Exception as cta_err:
+                        print(f"[career-portal] CTA fetch failed: {cta_err}")
+
+            if len(page_text.strip()) >= 200:
+                titles_str = ", ".join(titles)
+                ext = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=2048,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            f"From this {company} career portal page, extract open positions.\n\n"
+                            f"PREFERRED: roles matching any of: {titles_str}\n"
+                            f"FALLBACK: if none match, extract ALL engineering, management, "
+                            f"leadership, or manager-level roles on the page.\n\n"
+                            f"Page content:\n{page_text[:6000]}\n\n"
+                            "Return a JSON array: title, url, description, location. "
+                            "Return only valid JSON."
+                        )
+                    }]
+                )
+                raw = ext.content[0].text.strip()
+                try:
+                    scraped = json.loads(raw)
+                except Exception:
+                    m2 = re.search(r"\[[\s\S]*\]", raw)
+                    scraped = json.loads(m2.group()) if m2 else []
+                for j in (scraped if isinstance(scraped, list) else []):
+                    if isinstance(j, dict) and j.get("title"):
+                        all_jobs.append({
+                            "id":          f"portal_{abs(hash(j.get('url','') + j.get('title','')))}",
+                            "title":       j.get("title", ""),
+                            "company":     company,
+                            "location":    j.get("location", ""),
+                            "description": j.get("description", ""),
+                            "url":         j.get("url", portal_url),
+                        })
+                print(f"[career-portal] Scraped: {len(all_jobs)} jobs")
+            else:
+                print(f"[career-portal] Page too short ({len(page_text)} chars) — likely JS-rendered")
+        except Exception as e:
+            print(f"[career-portal] Scrape error: {e}")
+
+    result = _filter_portal_jobs(all_jobs, titles)
+    print(f"[career-portal] Returning {len(result)} / {len(all_jobs)} jobs for {company}")
+    return result
+
+
+_adzuna_batches: dict = {}
+
+
+@app.route("/adzuna/start-batch", methods=["POST"])
+def adzuna_start_batch():
+    data        = request.get_json(force=True)
+    titles      = data.get("titles", [])
+    company     = data.get("company", "").strip()
+    days        = int(data.get("days", 7))
+    location    = data.get("location", "").strip()
+    resume_text = data.get("resume_text", "").strip() or BASE_RESUME
+
+    if not titles:
+        return jsonify({"error": "No titles provided."}), 400
+    if not ADZUNA_APP_ID or not ADZUNA_APP_KEY:
+        return jsonify({"error": "Adzuna API credentials not configured."}), 500
+
+    batch_id = str(uuid.uuid4())
+    q: queue.Queue = queue.Queue()
+    _adzuna_batches[batch_id] = q
+
+    def run():
+        client = get_client()
+        source = "adzuna"
+        try:
+            jobs = fetch_adzuna_jobs(titles, company, days, location)
+        except Exception as e:
+            q.put({"status": "error", "error": str(e)})
+            q.put({"status": "complete", "total": 0, "high_match": 0})
+            return
+
+        if not jobs and company:
+            q.put({"status": "portal_check", "company": company})
+            try:
+                jobs = fetch_career_portal_jobs(company, titles, client)
+                if jobs:
+                    source = "career_portal"
+            except Exception as e:
+                print(f"[career-portal] fallback error: {e}")
+                jobs = []
+
+        q.put({"status": "fetched", "total": len(jobs), "source": source, "company": company})
+        if not jobs:
+            q.put({"status": "complete", "total": 0, "high_match": 0})
+            return
+
+        high_match = 0
+        for i, job in enumerate(jobs):
+            jd_text     = job["description"]
+            job_title   = job["title"]
+            job_company = job["company"]
+            job_url     = job["url"]
+            job_loc     = job["location"]
+
+            if not jd_text.strip():
+                continue
+
+            q.put({"status": "analyzing", "title": job_title, "company": job_company,
+                   "index": i + 1, "total": len(jobs)})
+            try:
+                analysis = analyze_match(jd_text, resume_text, client)
+                pct      = analysis.get("match_percentage", 0)
+
+                folder  = safe_folder(job_company, job_title)
+                job_dir = JOBS_DIR / folder
+                job_dir.mkdir(exist_ok=True)
+
+                source_line = f"[{job_url}]({job_url})" if job_url else "Adzuna"
+                jd_md = (
+                    f"# {job_title} at {job_company}\n\n"
+                    f"**Source:** {source_line}\n"
+                    f"**Location:** {job_loc}\n\n"
+                    "---\n\n"
+                    f"{jd_text}"
+                )
+                (job_dir / "job_description.md").write_text(jd_md, encoding="utf-8")
+
+                tailored = cover = ""
+                has_full_data = False
+                if pct >= 70:
+                    high_match += 1
+                    has_full_data = True
+                    tailored = tailor_resume(resume_text, jd_text, job_company, job_title, client)
+                    cover    = write_cover_letter(resume_text, jd_text, job_company, job_title, client, "")
+                    (job_dir / "tailored_resume.md").write_text(tailored, encoding="utf-8")
+                    (job_dir / "cover_letter.md").write_text(cover,    encoding="utf-8")
+
+                db.upsert_job(DB_PATH, {
+                    "folder":           folder,
+                    "company":          job_company,
+                    "title":            job_title,
+                    "location":         job_loc,
+                    "url":              job_url,
+                    "created_at":       datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "match_percentage": pct,
+                    "has_pdf":          False,
+                    "resume_source":    "base",
+                    "analysis":         analysis,
+                    "tailored_resume":  tailored,
+                    "cover_letter":     cover,
+                    "job_description":  jd_md,
+                })
+
+                q.put({"status": "done", "result": {
+                    "folder":        folder,
+                    "title":         job_title,
+                    "company":       job_company,
+                    "location":      job_loc,
+                    "match_percentage": pct,
+                    "has_full_data": has_full_data,
+                }})
+            except Exception as e:
+                print(f"[adzuna batch] error on {job_title}: {e}")
+                q.put({"status": "error", "title": job_title, "error": str(e)})
+
+        q.put({"status": "complete", "total": len(jobs), "high_match": high_match})
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"batch_id": batch_id})
+
+
+@app.route("/adzuna/batch-stream/<batch_id>")
+def adzuna_batch_stream(batch_id: str):
+    q = _adzuna_batches.get(batch_id)
+    if not q:
+        return jsonify({"error": "Unknown batch"}), 404
+
+    def generate():
+        while True:
+            try:
+                msg = q.get(timeout=30)
+                yield f"data: {json.dumps(msg)}\n\n"
+                if msg.get("status") == "complete":
+                    break
+            except queue.Empty:
+                yield 'data: {"status":"ping"}\n\n'
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.route("/skill-builder")
 def skill_builder():
     skill = request.args.get("skill", "").strip()
@@ -1229,4 +1619,4 @@ def linkedin_batch_stream(batch_id: str):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=4567, threaded=True)
+    app.run(debug=True, port=4567, threaded=True, use_reloader=False)
