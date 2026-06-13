@@ -10,6 +10,13 @@ These rules are applied every time the resume is tailored for a job. Follow them
 
 4. **Do not bold sub-section label phrases inside bullet points**: Phrases like "Strategic Product Leadership:", "Organizational Leadership & Ecosystem Scale:", "Enterprise-Wide Influence:", or any similar descriptive label at the start of a bullet must be written in plain text — no bold, no markdown `**`.
 
+5. **Filter Technical Skills to job-relevant ones only**: The base resume contains the full set of skills across all categories. For each tailored resume, include only the skill categories and individual skills that are relevant to the target role. Omit categories entirely if none of their skills apply. Never invent skills not present in the base resume.
+
+6. **Adapt the current Synopsys job title based on the seniority of the target role**:
+   - If the target role is Director level or above (e.g., Director, Senior Director, VP, SVP, C-suite), use the title **Senior Software Engineering Director** for the current Synopsys position.
+   - If the target role is Manager or Senior Manager level, use the title **Software Engineering Director** for the current Synopsys position.
+   - Keep all other details of the Synopsys role (company name, dates, bullets) exactly as written.
+
 ---
 
 # Cover Letter Rules

@@ -8,7 +8,8 @@ https://www.linkedin.com/in/thejoprakash
 ## Technical Skills
 
 - **Programming Languages:** C, C++, Java, Python, PHP, Tcl
-- **Machine Learning & AI:** Applied Machine Learning, Deep Learning, Sequence Models, Agentic AI, Training & Inference Infrastructure, Scikit-learn, TensorFlow, PyTorch, FAISS, Embeddings, Vector Databases
+- **Machine Learning & AI:** Applied Machine Learning, Deep Learning, Sequence Models, Agentic AI, Embeddings, Vector Databases
+- **ML Frameworks:** Scikit-learn, TensorFlow, PyTorch, FAISS
 - **Algorithms & Theory:** Data Structures, Algorithms, Combinatorial Optimization, Graph Algorithms
 - **Hardware & Architecture:** ASIC, FPGA, CPU Architecture, SoC Design
 - **Distributed Systems:** Distributed Systems Design, Meta-scale Infrastructure

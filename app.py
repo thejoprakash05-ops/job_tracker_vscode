@@ -38,7 +38,7 @@ DB_PATH = JOBS_DIR / "jobs2.db"
 db.init_db(DB_PATH)
 db.migrate_from_files(JOBS_DIR, DB_PATH)
 
-BASE_RESUME = (BASE_DIR / "base_resume.md").read_text(encoding="utf-8")
+BASE_RESUME = (BASE_DIR / "base_resume_2.md").read_text(encoding="utf-8")
 
 _rules_path = BASE_DIR / "rules.md"
 if _rules_path.exists():
