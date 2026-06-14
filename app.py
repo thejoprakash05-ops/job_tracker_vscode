@@ -1,5 +1,6 @@
 import base64
 import io
+import logging
 import os
 import json
 import queue
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import uuid
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import anthropic
@@ -24,8 +26,44 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# ---------------------------------------------------------------------------
+# Execution trace logger
+# ---------------------------------------------------------------------------
+_exec_log = logging.getLogger("exec_trace")
+_exec_log.setLevel(logging.DEBUG)
+_exec_log.propagate = False
+_exec_handler = RotatingFileHandler(
+    Path(__file__).parent / "execution.log",
+    maxBytes=5_000_000, backupCount=3, encoding="utf-8",
+)
+_exec_handler.setFormatter(logging.Formatter("%(message)s"))
+_exec_log.addHandler(_exec_handler)
+
+
+def _snip(text: str, n: int = 400) -> str:
+    s = str(text).strip()
+    return s[:n] + f"\n     [...{len(s)-n} more chars]" if len(s) > n else s
+
+
+def _trace_header(session: str, title: str) -> None:
+    bar = "═" * 72
+    _exec_log.info(
+        f"\n{bar}\n  {title}\n  Session : {session}"
+        f"\n  Time    : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{bar}"
+    )
+
+
+def _trace(session: str, step: str, direction: str, **fields) -> None:
+    arrow = "▶ IN " if direction == "IN" else "◀ OUT"
+    lines = [f"\n── {step} {arrow} " + "─" * max(0, 54 - len(step))]
+    lines.append(f"   session  : {session}")
+    for k, v in fields.items():
+        lines.append(f"   {k:<10}: {_snip(str(v))}")
+    _exec_log.info("\n".join(lines))
+
 ADZUNA_APP_ID  = os.getenv("ADZUNA_APP_ID",  "")
 ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "")
+CAREER_PORTAL_FALLBACK = os.getenv("CAREER_PORTAL_FALLBACK", "false").lower() in ("1", "true", "yes")
 
 BASE_DIR = Path(__file__).parent
 
@@ -637,6 +675,9 @@ def _run_analysis(
     cover_template: str = "",
 ) -> dict:
     """Core analysis logic — callable from the web endpoint and batch jobs."""
+    sid = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
+    _trace_header(sid, "Single Job Analysis")
+
     client = get_client()
 
     if not resume_text.strip():
@@ -645,12 +686,20 @@ def _run_analysis(
     else:
         resume_source = "uploaded"
 
+    _trace(sid, "Request", "IN",
+           url=url or "(none)",
+           manual_jd=manual_jd or "(none)",
+           company_override=company_override or "(none)",
+           title_override=title_override or "(none)",
+           resume_source=resume_source)
+
     jd_data: dict = {}
     if url:
         try:
             raw = fetch_page_text(url)
             if len(raw) < 200:
                 raise ValueError("Page returned too little text")
+            _trace(sid, "Fetch Page", "IN", url=url, raw_len=len(raw))
             jd_data = extract_jd(raw, url, client)
         except Exception as fetch_err:
             if manual_jd:
@@ -684,9 +733,32 @@ def _run_analysis(
     title   = jd_data.get("title",   "Unknown")
     jd_text = jd_data.get("job_description", "")
 
+    _trace(sid, "JD Extraction", "OUT",
+           company=company, title=title,
+           location=jd_data.get("location", ""),
+           jd_chars=len(jd_text),
+           jd_preview=jd_text)
+
+    _trace(sid, "Tailor Resume", "IN",
+           company=company, title=title,
+           resume_chars=len(resume_text),
+           jd_preview=jd_text)
     tailored = tailor_resume(resume_text, jd_text, company, title, client)
-    cover    = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
+    _trace(sid, "Tailor Resume", "OUT", tailored_chars=len(tailored), preview=tailored)
+
+    _trace(sid, "Cover Letter", "IN", company=company, title=title)
+    cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
+    _trace(sid, "Cover Letter", "OUT", cover_chars=len(cover), preview=cover)
+
+    _trace(sid, "Match Analysis", "IN", jd_preview=jd_text, resume_preview=tailored)
     analysis = analyze_match(jd_text, tailored, client)
+    _trace(sid, "Match Analysis", "OUT",
+           match_pct=analysis.get("match_percentage"),
+           matched=analysis.get("matched_skills"),
+           missing=analysis.get("missing_skills"),
+           strengths=analysis.get("strengths"),
+           gaps=analysis.get("gaps"),
+           summary=analysis.get("summary"))
 
     folder  = safe_folder(company, title)
     job_dir = JOBS_DIR / folder
@@ -724,6 +796,7 @@ def _run_analysis(
         "job_description":  jd_md,
     })
 
+    _trace(sid, "Save", "OUT", folder=folder, db="saved")
     return {
         "success":         True,
         "folder":          folder,
@@ -846,15 +919,22 @@ def download_file(folder: str, filename: str):
 # ---------------------------------------------------------------------------
 
 def fetch_adzuna_jobs(titles: list, company: str, days: int, location: str = "") -> list:
-    """Query Adzuna for each title; deduplicate by job id."""
+    """Query Adzuna for each title; deduplicate by job id.
+
+    Uses what_and + title_only so Adzuna restricts to titles containing all
+    words. Results are also post-filtered: every search word must appear in
+    the returned job title (guards against Adzuna loosening its match).
+    """
     jobs = []
     seen_ids: set = set()
     for title in titles:
+        search_words = [w.lower() for w in title.split()]
         params = {
-            "app_id":       ADZUNA_APP_ID,
-            "app_key":      ADZUNA_APP_KEY,
-            "what":         title,
-            "max_days_old": days,
+            "app_id":           ADZUNA_APP_ID,
+            "app_key":          ADZUNA_APP_KEY,
+            "what_phrase":      title,
+            "title_only":       1,
+            "max_days_old":     days,
             "results_per_page": 20,
         }
         if company:
@@ -870,6 +950,9 @@ def fetch_adzuna_jobs(titles: list, company: str, days: int, location: str = "")
             for job in resp.json().get("results", []):
                 jid = job.get("id")
                 if not jid or jid in seen_ids:
+                    continue
+                job_title_lower = job.get("title", "").lower()
+                if not all(w in job_title_lower for w in search_words):
                     continue
                 seen_ids.add(jid)
                 jobs.append({
@@ -923,17 +1006,16 @@ _MGMT_KEYWORDS = {
 
 
 def _filter_portal_jobs(all_jobs: list, titles: list) -> list:
-    """Return jobs matching the requested titles; fall back to all eng/mgmt roles."""
-    title_words: set = set()
-    for t in titles:
-        title_words.update(t.lower().split())
-    title_words -= {"of", "and", "the", "a", "an", "software"}
+    """Return jobs whose title contains an exact phrase match for a requested title.
+    Falls back to engineering/management keywords if no exact match found."""
+    titles_lower = [t.lower() for t in titles]
 
-    preferred = [j for j in all_jobs if any(w in j["title"].lower() for w in title_words)]
+    # Exact phrase match — "Engineering Manager" must appear verbatim in the job title
+    preferred = [j for j in all_jobs if any(t in j["title"].lower() for t in titles_lower)]
     if preferred:
         return preferred
 
-    # No keyword match — return all engineering / management / leadership roles
+    # No exact match — return all engineering / management / leadership roles
     fallback = [j for j in all_jobs if any(w in j["title"].lower() for w in _MGMT_KEYWORDS)]
     return fallback if fallback else all_jobs
 
@@ -1106,6 +1188,12 @@ def adzuna_start_batch():
     _adzuna_batches[batch_id] = q
 
     def run():
+        sid = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
+        _trace_header(sid, "Discover Jobs — Adzuna Batch")
+        _trace(sid, "Batch Request", "IN",
+               titles=titles, company=company or "(all)", days=days,
+               location=location or "(any)", resume_chars=len(resume_text))
+
         client = get_client()
         source = "adzuna"
         try:
@@ -1115,15 +1203,29 @@ def adzuna_start_batch():
             q.put({"status": "complete", "total": 0, "high_match": 0})
             return
 
-        if not jobs and company:
+        if not jobs and company and CAREER_PORTAL_FALLBACK:
+            _trace(sid, "Career Portal Fallback", "IN",
+                   reason="Adzuna returned 0 results", company=company, titles=titles)
             q.put({"status": "portal_check", "company": company})
             try:
                 jobs = fetch_career_portal_jobs(company, titles, client)
                 if jobs:
                     source = "career_portal"
+                _trace(sid, "Career Portal Fallback", "OUT",
+                       jobs_found=len(jobs), source=source)
             except Exception as e:
                 print(f"[career-portal] fallback error: {e}")
+                _trace(sid, "Career Portal Fallback", "OUT",
+                       jobs_found=0, error=str(e))
                 jobs = []
+        elif not jobs and company and not CAREER_PORTAL_FALLBACK:
+            _trace(sid, "Career Portal Fallback", "IN",
+                   reason="Adzuna returned 0 results — career portal disabled (CAREER_PORTAL_FALLBACK=false)",
+                   company=company)
+
+        _trace(sid, "Fetch Jobs", "OUT",
+               source=source, total=len(jobs),
+               titles_found=[j["title"] for j in jobs[:20]])
 
         q.put({"status": "fetched", "total": len(jobs), "source": source, "company": company})
         if not jobs:
@@ -1139,13 +1241,23 @@ def adzuna_start_batch():
             job_loc     = job["location"]
 
             if not jd_text.strip():
+                _trace(sid, f"Job {i+1}/{len(jobs)}", "OUT",
+                       title=job_title, company=job_company, skipped="empty JD")
                 continue
 
             q.put({"status": "analyzing", "title": job_title, "company": job_company,
                    "index": i + 1, "total": len(jobs)})
+            _trace(sid, f"Job {i+1}/{len(jobs)} — Match", "IN",
+                   title=job_title, company=job_company, jd_chars=len(jd_text), jd_preview=jd_text)
             try:
                 analysis = analyze_match(jd_text, resume_text, client)
                 pct      = analysis.get("match_percentage", 0)
+
+                _trace(sid, f"Job {i+1}/{len(jobs)} — Match", "OUT",
+                       title=job_title, match_pct=pct,
+                       matched=analysis.get("matched_skills"),
+                       missing=analysis.get("missing_skills"),
+                       summary=analysis.get("summary"))
 
                 folder  = safe_folder(job_company, job_title)
                 job_dir = JOBS_DIR / folder
@@ -1163,11 +1275,17 @@ def adzuna_start_batch():
 
                 tailored = cover = ""
                 has_full_data = False
-                if pct >= 70:
+                if pct >= 50:
                     high_match += 1
                     has_full_data = True
+                    _trace(sid, f"Job {i+1}/{len(jobs)} — Tailor", "IN",
+                           title=job_title, company=job_company)
                     tailored = tailor_resume(resume_text, jd_text, job_company, job_title, client)
+                    _trace(sid, f"Job {i+1}/{len(jobs)} — Tailor", "OUT",
+                           tailored_chars=len(tailored), preview=tailored)
                     cover    = write_cover_letter(resume_text, jd_text, job_company, job_title, client, "")
+                    _trace(sid, f"Job {i+1}/{len(jobs)} — Cover", "OUT",
+                           cover_chars=len(cover), preview=cover)
                     (job_dir / "tailored_resume.md").write_text(tailored, encoding="utf-8")
                     (job_dir / "cover_letter.md").write_text(cover,    encoding="utf-8")
 
@@ -1187,6 +1305,10 @@ def adzuna_start_batch():
                     "job_description":  jd_md,
                 })
 
+                _trace(sid, f"Job {i+1}/{len(jobs)} — Save", "OUT",
+                       folder=folder, match_pct=pct,
+                       full_data=has_full_data)
+
                 q.put({"status": "done", "result": {
                     "folder":        folder,
                     "title":         job_title,
@@ -1197,8 +1319,12 @@ def adzuna_start_batch():
                 }})
             except Exception as e:
                 print(f"[adzuna batch] error on {job_title}: {e}")
+                _trace(sid, f"Job {i+1}/{len(jobs)} — Error", "OUT",
+                       title=job_title, error=str(e))
                 q.put({"status": "error", "title": job_title, "error": str(e)})
 
+        _trace(sid, "Batch Complete", "OUT",
+               total_scanned=len(jobs), high_match=high_match)
         q.put({"status": "complete", "total": len(jobs), "high_match": high_match})
 
     threading.Thread(target=run, daemon=True).start()

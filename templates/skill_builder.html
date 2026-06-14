@@ -6,6 +6,13 @@
   <title>Skill Builder — {{ skill }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="stylesheet" href="/static/style.css" />
+  <script>
+    (function() {
+      document.documentElement.setAttribute(
+        'data-theme', localStorage.getItem('theme') || 'dark'
+      );
+    })();
+  </script>
 </head>
 <body>
 
@@ -16,6 +23,9 @@
       <span>Job Application Optimizer</span>
     </a>
     <span class="header-sub">Skill Builder &mdash; Powered by Claude AI</span>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark theme">
+      <span id="themeIcon">☀</span> <span id="themeLabel">Light</span>
+    </button>
   </div>
 </header>
 
@@ -46,6 +56,19 @@
 </main>
 
 <script>
+function _applyThemeUI() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.getElementById('themeIcon').textContent  = isDark ? '☀' : '☾';
+  document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  _applyThemeUI();
+}
+document.addEventListener('DOMContentLoaded', _applyThemeUI);
+
 const skill = {{ skill | tojson }};
 
 async function loadContent(refresh = false) {

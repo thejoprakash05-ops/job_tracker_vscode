@@ -7,6 +7,14 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="stylesheet" href="/static/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    // Apply theme before first paint to avoid flash
+    (function() {
+      document.documentElement.setAttribute(
+        'data-theme', localStorage.getItem('theme') || 'dark'
+      );
+    })();
+  </script>
 </head>
 <body>
 
@@ -17,6 +25,9 @@
       <span>Job Application Optimizer</span>
     </a>
     <span class="header-sub">Powered by Claude AI</span>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark theme">
+      <span id="themeIcon">☀</span> <span id="themeLabel">Light</span>
+    </button>
   </div>
 </header>
 
@@ -284,11 +295,20 @@
 
   <!-- ── HISTORY ───────────────────────────────────────────────────── -->
   <section id="historySection">
-    <h2 class="section-heading">Previous Applications</h2>
+    <div class="history-header">
+      <h2 class="section-heading">Previous Applications</h2>
+      <div class="history-bulk-actions">
+        <button class="btn-link" onclick="historySelectAll(true)">Select All</button>
+        <button class="btn-link" onclick="historySelectAll(false)">Deselect All</button>
+        <button id="deleteSelectedBtn" class="btn-danger hidden" onclick="deleteSelected()">Delete Selected (0)</button>
+      </div>
+    </div>
     {% if jobs %}
     <div class="jobs-grid">
       {% for job in jobs %}
       <div class="job-card" data-folder="{{ job.folder }}" title="Click to view results">
+        <input type="checkbox" class="job-select-cb" data-folder="{{ job.folder }}"
+               onclick="event.stopPropagation(); updateDeleteSelectedBtn();" />
         <button class="btn-delete-job" onclick="deleteJob(event,'{{ job.folder }}')" title="Delete application">&#10005;</button>
         <div class="job-card-score
           {% if job.match_percentage >= 80 %} score-high
@@ -329,7 +349,7 @@
     <section>
       <div class="card">
         <h2 class="card-title">Discover Matching Jobs</h2>
-        <p class="card-sub">Search Adzuna for open positions and auto-rank them against your resume. Positions ≥ 70% get a tailored resume and cover letter generated automatically.</p>
+        <p class="card-sub">Search Adzuna for open positions and auto-rank them against your resume. Positions ≥ 50% get a tailored resume and cover letter generated automatically.</p>
 
         <div class="form-row">
           <div style="display:flex;align-items:center;gap:1rem;margin-bottom:.5rem">
@@ -379,7 +399,6 @@
 
         <div class="form-actions">
           <button type="button" id="azSearchBtn" class="btn-primary" onclick="startAdzunaSearch()">Search Adzuna</button>
-          <button type="button" id="azStopBtn" class="btn-secondary hidden" onclick="stopAdzunaSearch()">Stop</button>
         </div>
       </div>
     </section>
@@ -389,6 +408,7 @@
       <div class="card" style="padding:1.25rem 2rem">
         <div class="ln-progress-bar-bg"><div id="azProgressBar" class="ln-progress-bar"></div></div>
         <p id="azProgressText" class="ln-progress-text" style="margin-top:.5rem"></p>
+        <button type="button" id="azStopBtn" class="btn-secondary hidden" onclick="stopAdzunaSearch()" style="margin-top:.85rem">&#9632; Stop Search</button>
         <div id="azError" class="error-banner hidden" style="margin-top:.75rem"></div>
       </div>
     </section>
@@ -404,6 +424,20 @@
 </main>
 
 <script>
+// ── Theme ─────────────────────────────────────────────────────────────────
+function _applyThemeUI() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.getElementById('themeIcon').textContent  = isDark ? '☀' : '☾';
+  document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  _applyThemeUI();
+}
+document.addEventListener('DOMContentLoaded', _applyThemeUI);
+
 // ── State ────────────────────────────────────────────────────────────────
 let currentFolder = null;
 let rawResume = "";
@@ -665,6 +699,8 @@ function refreshHistory(data) {
   card.className = "job-card new-card";
   card.dataset.folder = data.folder;
   card.innerHTML = `
+    <input type="checkbox" class="job-select-cb" data-folder="${data.folder}"
+           onclick="event.stopPropagation(); updateDeleteSelectedBtn();" />
     <button class="btn-delete-job" onclick="deleteJob(event,'${data.folder}')" title="Delete application">&#10005;</button>
     <div class="job-card-score ${cls}">${pct}%</div>
     <div class="job-card-info">
@@ -753,6 +789,7 @@ async function deleteJob(e, folder) {
       card.style.transform = 'scale(0.96)';
       setTimeout(() => {
         card.remove();
+        updateDeleteSelectedBtn();
         const grid = document.querySelector('.jobs-grid');
         if (grid && !grid.children.length) {
           grid.remove();
@@ -802,6 +839,54 @@ async function copyToClipboard(text, btnId) {
   const orig = btn.textContent;
   btn.textContent = "✓ Copied!";
   setTimeout(() => { btn.textContent = orig; }, 2000);
+}
+
+// ── History bulk select/delete ───────────────────────────────────────────
+function historySelectAll(checked) {
+  document.querySelectorAll('.job-select-cb').forEach(cb => { cb.checked = checked; });
+  updateDeleteSelectedBtn();
+}
+
+function updateDeleteSelectedBtn() {
+  const n   = document.querySelectorAll('.job-select-cb:checked').length;
+  const btn = document.getElementById('deleteSelectedBtn');
+  if (n > 0) {
+    btn.textContent = `Delete Selected (${n})`;
+    btn.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+
+async function deleteSelected() {
+  const checked = [...document.querySelectorAll('.job-select-cb:checked')];
+  if (!checked.length) return;
+  if (!confirm(`Delete ${checked.length} application${checked.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+
+  for (const cb of checked) {
+    const folder = cb.dataset.folder;
+    try {
+      await fetch(`/jobs/${folder}/delete`, { method: 'POST' });
+      const card = document.querySelector(`.job-card[data-folder="${folder}"]`);
+      if (card) card.remove();
+      if (currentFolder === folder) {
+        resultsSection.classList.add('hidden');
+        currentFolder = null;
+      }
+    } catch (err) {
+      console.error('Failed to delete', folder, err);
+    }
+  }
+
+  updateDeleteSelectedBtn();
+  const grid = document.querySelector('.jobs-grid');
+  if (grid && !grid.children.length) {
+    grid.remove();
+    const p = document.createElement('p');
+    p.className = 'empty-state';
+    p.textContent = 'No applications analyzed yet. Submit a job URL above to get started.';
+    document.getElementById('historySection').appendChild(p);
+  }
 }
 
 // ── Page-level tab switching ─────────────────────────────────────────────
@@ -931,7 +1016,7 @@ async function startAdzunaSearch() {
         } else if (msg.status === "complete") {
           evtSrc.close();
           progressText.textContent =
-            `Done — ${msg.total} scanned, ${msg.high_match} strong match${msg.high_match !== 1 ? "es" : ""} (≥ 70%).`;
+            `Done — ${msg.total} scanned, ${msg.high_match} match${msg.high_match !== 1 ? "es" : ""} at ≥ 50%.`;
           azResultCount.textContent = `— ${done} found`;
           resolve();
         }
@@ -961,7 +1046,7 @@ function addAdzunaResultCard(result) {
 
   const badge = full
     ? `<span class="az-full-badge">Resume + Cover generated</span>`
-    : `<span class="az-low-badge">Score only (&lt; 70%)</span>`;
+    : `<span class="az-low-badge">Score only (&lt; 50%)</span>`;
 
   const links = full
     ? `<a href="/jobs/${result.folder}/download/tailored_resume.md" class="link-dl">Resume</a>

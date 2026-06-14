@@ -16,10 +16,41 @@
   --red:         #dc2626;
   --red-lt:      #fee2e2;
   --blue-lt:     #dbeafe;
+  --input-bg:    #ffffff;
   --radius:      12px;
   --shadow:      0 1px 4px rgba(0,0,0,.08);
   --shadow-md:   0 4px 12px rgba(0,0,0,.10);
 }
+
+[data-theme="dark"] {
+  --bg:          #0f172a;
+  --card:        #1e293b;
+  --border:      #334155;
+  --text:        #e2e8f0;
+  --muted:       #94a3b8;
+  --primary:     #3b82f6;
+  --primary-dk:  #2563eb;
+  --green:       #22c55e;
+  --green-lt:    rgba(34, 197, 94, .15);
+  --amber:       #f59e0b;
+  --amber-lt:    rgba(245, 158, 11, .15);
+  --red:         #f87171;
+  --red-lt:      rgba(248, 113, 113, .15);
+  --blue-lt:     rgba(59, 130, 246, .15);
+  --input-bg:    #0f172a;
+  --shadow:      0 1px 4px rgba(0,0,0,.4);
+  --shadow-md:   0 4px 12px rgba(0,0,0,.5);
+}
+
+[data-theme="dark"] .chip-uploaded { background: rgba(139, 92, 246, .2); color: #a78bfa; }
+[data-theme="dark"] .yt-badge      { background: rgba(220, 38, 38, .2); color: #f87171; }
+[data-theme="dark"] .dl-badge      { background: rgba(245, 158, 11, .2); color: #fcd34d; }
+[data-theme="dark"] .edx-badge     { background: rgba(109, 40, 217, .2); color: #c4b5fd; }
+[data-theme="dark"] .udacity-badge { background: rgba(6, 95, 70, .25);  color: #6ee7b7; }
+[data-theme="dark"] .fastai-badge  { background: rgba(154, 52, 18, .2); color: #fdba74; }
+[data-theme="dark"] .mentor-badge  { background: rgba(124, 58, 237, .2); color: #a78bfa; }
+[data-theme="dark"] .ln-cookie-steps kbd,
+[data-theme="dark"] .ln-cookie-steps code { background: var(--bg); border-color: var(--border); }
 
 html { font-size: 16px; }
 body {
@@ -124,7 +155,7 @@ textarea {
   font-size: .95rem;
   font-family: inherit;
   color: var(--text);
-  background: #fff;
+  background: var(--input-bg);
   transition: border-color .15s, box-shadow .15s;
 }
 input:focus, textarea:focus {
@@ -893,6 +924,49 @@ textarea { resize: vertical; min-height: 140px; }
 }
 .btn-refresh:hover { background: var(--blue-lt); }
 
+/* ── History bulk actions ────────────────────────────────────────────── */
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.history-header .section-heading { margin-bottom: 0; }
+.history-bulk-actions { display: flex; align-items: center; gap: .75rem; }
+
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: .3rem .85rem;
+  font-size: .8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.btn-danger:hover { opacity: .85; }
+
+.job-select-cb {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  accent-color: var(--primary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s;
+  z-index: 3;
+}
+.job-card:hover .job-select-cb,
+.job-select-cb:checked { opacity: 1; }
+.job-card:has(.job-select-cb:checked) {
+  border-color: var(--primary);
+  background: var(--blue-lt);
+}
+
 /* ── Page-level tabs ─────────────────────────────────────────────────── */
 .page-tab-bar {
   display: flex;
@@ -970,7 +1044,7 @@ input[type="number"] {
   font-size: .95rem;
   font-family: inherit;
   color: var(--text);
-  background: #fff;
+  background: var(--input-bg);
   transition: border-color .15s, box-shadow .15s;
 }
 input[type="number"]:focus {
@@ -978,6 +1052,25 @@ input[type="number"]:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37,99,235,.12);
 }
+
+/* ── Theme toggle ────────────────────────────────────────────────────── */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: .25rem .7rem;
+  cursor: pointer;
+  color: var(--text);
+  font-size: .8rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  transition: background .15s, border-color .15s;
+  white-space: nowrap;
+  margin-left: .75rem;
+}
+.theme-toggle:hover { background: var(--border); }
 
 /* ── Responsive ──────────────────────────────────────────────────────── */
 @media (max-width: 680px) {
