@@ -46,16 +46,16 @@
   <section id="inputSection">
     <div class="card">
       <h2 class="card-title">Analyze a Job Posting</h2>
-      <p class="card-sub">Paste a job URL and Claude will tailor your resume, write a cover letter, and score the match.</p>
+      <p class="card-sub">Paste a job URL and Claude will score the match against your resume. Tailoring the resume and writing a cover letter is a separate one-click step, so you only pay for it on jobs worth pursuing.</p>
 
       <form id="analyzeForm" novalidate>
 
         <div class="form-row">
           <div class="form-group full">
-            <label for="url">Job Posting URL</label>
-            <input id="url" name="url" type="url"
-              placeholder="https://www.linkedin.com/jobs/... or any job board URL" />
-            <span class="hint">Works with most job boards. If a site blocks scraping, expand Optional settings below and paste the JD.</span>
+            <label for="url">Job Posting URL(s)</label>
+            <textarea id="url" name="url" rows="3"
+              placeholder="https://www.linkedin.com/jobs/... or any job board URL&#10;One URL per line to process several jobs in series"></textarea>
+            <span class="hint">Works with most job boards. Paste one URL per line to analyze multiple jobs — they're processed one at a time. If a site blocks scraping, expand Optional settings below and paste the JD.</span>
           </div>
         </div>
 
@@ -108,7 +108,7 @@
           <button type="submit" id="submitBtn" class="btn-primary">
             <span id="submitLabel">Analyze &amp; Optimize</span>
           </button>
-          <span class="hint cost-estimate">~$0.08–0.10 in Claude API usage per click (4 calls: extract JD, tailor resume, cover letter, match analysis)</span>
+          <span class="hint cost-estimate">~$0.03–0.04 in Claude API usage per click (extract JD + match score). Tailoring the resume and cover letter is a separate step, ~$0.05 more, only when you click "Generate".</span>
         </div>
 
       </form>
@@ -120,6 +120,7 @@
     <div class="card loading-card">
       <div class="spinner"></div>
       <h3 id="loadingTitle">Processing your application…</h3>
+      <p id="batchProgress" class="hint hidden"></p>
       <div class="steps-list">
         <div class="step-item" id="step1"><span class="step-dot pending"></span> Fetching job description</div>
         <div class="step-item" id="step2"><span class="step-dot pending"></span> Tailoring resume to the role</div>
@@ -324,12 +325,19 @@
           <p class="job-card-date">{{ job.date }}</p>
         </div>
         <div class="job-card-links">
-          {% if job.has_pdf %}
-          <a href="/jobs/{{ job.folder }}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
-          <a href="/jobs/{{ job.folder }}/download/cover_letter.pdf" class="link-dl link-pdf">Cover PDF</a>
+          {% if job.has_tailored %}
+            {% if job.has_pdf %}
+            <a href="/jobs/{{ job.folder }}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+            <a href="/jobs/{{ job.folder }}/download/cover_letter.pdf" class="link-dl link-pdf">Cover PDF</a>
+            {% else %}
+            <a href="/jobs/{{ job.folder }}/download/tailored_resume.md" class="link-dl">Resume</a>
+            <a href="/jobs/{{ job.folder }}/download/cover_letter.md" class="link-dl">Cover Letter</a>
+            {% endif %}
           {% else %}
-          <a href="/jobs/{{ job.folder }}/download/tailored_resume.md" class="link-dl">Resume</a>
-          <a href="/jobs/{{ job.folder }}/download/cover_letter.md" class="link-dl">Cover Letter</a>
+            <button class="link-dl btn-generate-tailored" data-folder="{{ job.folder }}"
+                    onclick="event.stopPropagation(); generateTailored('{{ job.folder }}', this);">
+              &#10024; Generate tailored resume
+            </button>
           {% endif %}
           <a href="/jobs/{{ job.folder }}/download/job_description.md" class="link-dl">JD</a>
         </div>
@@ -497,24 +505,8 @@ function finishSteps() {
   });
 }
 
-// ── Form submit ──────────────────────────────────────────────────────────
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  const url       = document.getElementById("url").value.trim();
-  const manualJD  = document.getElementById("manualJD").value.trim();
-  const company   = document.getElementById("company").value.trim();
-  const jobTitle  = document.getElementById("jobTitle").value.trim();
-
-  if (!url && !manualJD) {
-    showError("Please enter a job URL or paste the job description.");
-    return;
-  }
-
-  hideError();
-  showLoading();
-  startStepAnimation();
-
+// ── Single-URL analysis (one /analyze call) ────────────────────────────────
+async function analyzeOne(url, manualJD, company, jobTitle) {
   const formData = new FormData();
   formData.append("url",        url);
   formData.append("manual_jd",  manualJD);
@@ -526,45 +518,81 @@ form.addEventListener("submit", async (e) => {
   if (resumeFileInput.files[0])    formData.append("resume_file",          resumeFileInput.files[0]);
   if (coverTemplateInput.files[0]) formData.append("cover_template_file",  coverTemplateInput.files[0]);
 
+  const res = await fetch("/analyze", { method: "POST", body: formData });
+  const raw = await res.text();
+  let data;
   try {
-    const res  = await fetch("/analyze", { method: "POST", body: formData });
-
-    // Always read as text first so we can show it even if JSON parsing fails
-    const raw  = await res.text();
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch (_) {
-      finishSteps();
-      hideLoading();
-      showError(
-        `Server error ${res.status}: ` +
-        (raw.substring(0, 400) || "No response body. Check the terminal for the full traceback.")
-      );
-      return;
-    }
-
-    finishSteps();
-
-    if (!res.ok || data.error) {
-      hideLoading();
-      const detail = data.detail
-        ? `\n\nDetail:\n${data.detail.split("\n").slice(-6).join("\n")}`
-        : "";
-      showError((data.error || "An unexpected error occurred.") + detail);
-      return;
-    }
-
-    hideLoading();
-    renderResults(data);
-    refreshHistory(data);
-
-  } catch (err) {
-    finishSteps();
-    hideLoading();
-    showError(
-      "Could not reach the server. Make sure app.py is running.\n" + err.message
+    data = JSON.parse(raw);
+  } catch (_) {
+    throw new Error(
+      `Server error ${res.status}: ` +
+      (raw.substring(0, 400) || "No response body. Check the terminal for the full traceback.")
     );
+  }
+  if (!res.ok || data.error) {
+    const detail = data.detail ? `\n\nDetail:\n${data.detail.split("\n").slice(-6).join("\n")}` : "";
+    throw new Error((data.error || "An unexpected error occurred.") + detail);
+  }
+  return data;
+}
+
+// ── Form submit ──────────────────────────────────────────────────────────
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const urls = document.getElementById("url").value
+    .split("\n")
+    .map(s => s.trim())
+    .filter(Boolean);
+  const manualJD  = document.getElementById("manualJD").value.trim();
+  const company   = document.getElementById("company").value.trim();
+  const jobTitle  = document.getElementById("jobTitle").value.trim();
+
+  if (urls.length === 0 && !manualJD) {
+    showError("Please enter a job URL or paste the job description.");
+    return;
+  }
+
+  hideError();
+  showLoading();
+
+  const batchProgress = document.getElementById("batchProgress");
+  // Manual JD with no URLs is still a single-job submission.
+  const jobs = urls.length ? urls : [""];
+  const errors = [];
+  let lastData = null;
+
+  for (let i = 0; i < jobs.length; i++) {
+    if (jobs.length > 1) {
+      batchProgress.textContent = `Processing job ${i + 1} of ${jobs.length}…`;
+      batchProgress.classList.remove("hidden");
+    } else {
+      batchProgress.classList.add("hidden");
+    }
+    startStepAnimation();
+
+    try {
+      const data = await analyzeOne(jobs[i], manualJD, company, jobTitle);
+      finishSteps();
+      lastData = data;
+      refreshHistory(data);
+    } catch (err) {
+      finishSteps();
+      const label = jobs[i] || "(pasted JD)";
+      errors.push(`${label}: ${err.message}`);
+    }
+  }
+
+  hideLoading();
+
+  if (lastData) renderResults(lastData);
+
+  if (errors.length) {
+    showError(
+      `${errors.length} of ${jobs.length} job(s) failed:\n\n` + errors.join("\n\n")
+    );
+  } else {
+    hideError();
   }
 });
 
@@ -598,29 +626,45 @@ function renderResults(data) {
   renderList("strengthsList", a.strengths || []);
   renderList("gapsList",       a.gaps     || []);
 
-  // Markdown previews
-  document.getElementById("resumePreview").innerHTML = marked.parse(rawResume);
-  document.getElementById("coverPreview").innerHTML  = marked.parse(rawCover);
-  document.getElementById("jdPreview").innerHTML     = marked.parse(rawJD);
+  document.getElementById("jdPreview").innerHTML = marked.parse(rawJD);
 
-  // Download buttons
-  const hasPdf = !!data.has_pdf;
-  document.getElementById("dlResumePdf").onclick  = () =>
-    window.location.href = `/jobs/${currentFolder}/download/tailored_resume.pdf`;
-  document.getElementById("dlResumeMd").onclick   = () =>
-    window.location.href = `/jobs/${currentFolder}/download/tailored_resume.md`;
-  document.getElementById("dlCoverPdf").onclick   = () =>
-    window.location.href = `/jobs/${currentFolder}/download/cover_letter.pdf`;
-  document.getElementById("dlCoverMd").onclick    = () =>
-    window.location.href = `/jobs/${currentFolder}/download/cover_letter.md`;
+  const hasTailored = !!data.has_tailored;
+  const resumePane  = document.getElementById("tab-resume");
+  const coverPane   = document.getElementById("tab-cover");
 
-  // Show/hide PDF buttons based on generation success
-  document.getElementById("dlResumePdf").style.display = hasPdf ? "" : "none";
-  document.getElementById("dlCoverPdf").style.display  = hasPdf ? "" : "none";
+  if (hasTailored) {
+    resumePane.querySelector(".pane-actions").classList.remove("hidden");
+    coverPane.querySelector(".pane-actions").classList.remove("hidden");
+    document.getElementById("resumePreview").innerHTML = marked.parse(rawResume);
+    document.getElementById("coverPreview").innerHTML  = marked.parse(rawCover);
 
-  // Copy buttons
-  document.getElementById("copyResume").onclick = () => copyToClipboard(rawResume, "copyResume");
-  document.getElementById("copyCover").onclick  = () => copyToClipboard(rawCover,  "copyCover");
+    const hasPdf = !!data.has_pdf;
+    document.getElementById("dlResumePdf").onclick = () =>
+      window.location.href = `/jobs/${currentFolder}/download/tailored_resume.pdf`;
+    document.getElementById("dlResumeMd").onclick  = () =>
+      window.location.href = `/jobs/${currentFolder}/download/tailored_resume.md`;
+    document.getElementById("dlCoverPdf").onclick  = () =>
+      window.location.href = `/jobs/${currentFolder}/download/cover_letter.pdf`;
+    document.getElementById("dlCoverMd").onclick   = () =>
+      window.location.href = `/jobs/${currentFolder}/download/cover_letter.md`;
+    document.getElementById("dlResumePdf").style.display = hasPdf ? "" : "none";
+    document.getElementById("dlCoverPdf").style.display  = hasPdf ? "" : "none";
+
+    document.getElementById("copyResume").onclick = () => copyToClipboard(rawResume, "copyResume");
+    document.getElementById("copyCover").onclick   = () => copyToClipboard(rawCover,  "copyCover");
+  } else {
+    resumePane.querySelector(".pane-actions").classList.add("hidden");
+    coverPane.querySelector(".pane-actions").classList.add("hidden");
+    const cta = `
+      <p class="hint" style="margin-bottom:.75rem">
+        Not generated yet — tailoring costs 2 extra API calls, so it only runs when you ask for it.
+      </p>
+      <button type="button" class="btn-primary" onclick="generateTailored(currentFolder, this)">
+        &#10024; Generate tailored resume &amp; cover letter
+      </button>`;
+    document.getElementById("resumePreview").innerHTML = cta;
+    document.getElementById("coverPreview").innerHTML  = cta;
+  }
 
   // Resume source chip
   const chip = document.getElementById("resumeSourceChip");
@@ -711,11 +755,16 @@ function refreshHistory(data) {
       <p class="job-card-date">${new Date().toLocaleString()}</p>
     </div>
     <div class="job-card-links">
-      ${data.has_pdf
-        ? `<a href="/jobs/${data.folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
-           <a href="/jobs/${data.folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>`
-        : `<a href="/jobs/${data.folder}/download/tailored_resume.md" class="link-dl">Resume</a>
-           <a href="/jobs/${data.folder}/download/cover_letter.md"    class="link-dl">Cover Letter</a>`
+      ${data.has_tailored
+        ? (data.has_pdf
+            ? `<a href="/jobs/${data.folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+               <a href="/jobs/${data.folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>`
+            : `<a href="/jobs/${data.folder}/download/tailored_resume.md" class="link-dl">Resume</a>
+               <a href="/jobs/${data.folder}/download/cover_letter.md"    class="link-dl">Cover Letter</a>`)
+        : `<button class="link-dl btn-generate-tailored" data-folder="${data.folder}"
+                   onclick="event.stopPropagation(); generateTailored('${data.folder}', this);">
+             &#10024; Generate tailored resume
+           </button>`
       }
       <a href="/jobs/${data.folder}/download/job_description.md" class="link-dl">JD</a>
     </div>`;
@@ -773,6 +822,53 @@ async function loadJobData(folder) {
   } finally {
     btn.disabled = false;
     btn.textContent = "Analyze & Optimize";
+  }
+}
+
+// ── On-demand tailored resume + cover letter generation ─────────────────────
+async function generateTailored(folder, btnEl) {
+  if (!folder) return;
+  hideError();
+  const originalLabel = btnEl ? btnEl.innerHTML : null;
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.innerHTML = "Generating…";
+  }
+  try {
+    const res  = await fetch(`/jobs/${folder}/generate-tailored`, { method: "POST" });
+    const raw  = await res.text();
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (_) {
+      showError(`Could not parse response (HTTP ${res.status}): ${raw.substring(0, 200)}`);
+      return;
+    }
+    if (!res.ok || data.error) {
+      showError(data.error || `Server error ${res.status}`);
+      return;
+    }
+
+    // Update the job card's links (swap the "Generate" button for download links)
+    const card = document.querySelector(`.job-card[data-folder="${folder}"]`);
+    if (card) {
+      const links = card.querySelector(".job-card-links");
+      const genBtn = links && links.querySelector(".btn-generate-tailored");
+      if (genBtn) {
+        genBtn.outerHTML = `
+          <a href="/jobs/${folder}/download/tailored_resume.md" class="link-dl">Resume</a>
+          <a href="/jobs/${folder}/download/cover_letter.md"    class="link-dl">Cover Letter</a>`;
+      }
+    }
+
+    // If this job is currently displayed, refresh the detail view
+    if (currentFolder === folder) renderResults(data);
+
+  } catch (err) {
+    showError("Could not generate tailored resume: " + err.message);
+    if (btnEl && originalLabel !== null) {
+      btnEl.disabled = false;
+      btnEl.innerHTML = originalLabel;
+    }
   }
 }
 

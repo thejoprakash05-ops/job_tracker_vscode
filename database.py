@@ -29,9 +29,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     analysis        TEXT             DEFAULT '{}',
     tailored_resume TEXT             DEFAULT '',
     cover_letter    TEXT             DEFAULT '',
-    job_description TEXT             DEFAULT ''
+    job_description TEXT             DEFAULT '',
+    resume_text     TEXT             DEFAULT '',
+    cover_template  TEXT             DEFAULT ''
 );
 """
+
+# Columns added after the initial release — applied via ALTER TABLE for
+# databases created before they existed (CREATE TABLE IF NOT EXISTS won't
+# add them to an already-existing table).
+_ADDED_COLUMNS = [
+    ("jobs", "resume_text",    "TEXT DEFAULT ''"),
+    ("jobs", "cover_template", "TEXT DEFAULT ''"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +69,11 @@ def _conn(db_path: Path):
 def init_db(db_path: Path) -> None:
     with _conn(db_path) as con:
         con.executescript(DDL)
+        for table, column, decl in _ADDED_COLUMNS:
+            try:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 def upsert_job(db_path: Path, data: dict) -> None:
@@ -68,8 +83,9 @@ def upsert_job(db_path: Path, data: dict) -> None:
             INSERT INTO jobs
                 (folder, company, title, location, url, created_at,
                  match_percentage, has_pdf, resume_source,
-                 analysis, tailored_resume, cover_letter, job_description)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 analysis, tailored_resume, cover_letter, job_description,
+                 resume_text, cover_template)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(folder) DO UPDATE SET
                 company          = excluded.company,
                 title            = excluded.title,
@@ -82,7 +98,9 @@ def upsert_job(db_path: Path, data: dict) -> None:
                 analysis         = excluded.analysis,
                 tailored_resume  = excluded.tailored_resume,
                 cover_letter     = excluded.cover_letter,
-                job_description  = excluded.job_description
+                job_description  = excluded.job_description,
+                resume_text      = excluded.resume_text,
+                cover_template   = excluded.cover_template
             """,
             (
                 data["folder"],
@@ -98,6 +116,8 @@ def upsert_job(db_path: Path, data: dict) -> None:
                 data.get("tailored_resume", ""),
                 data.get("cover_letter", ""),
                 data.get("job_description", ""),
+                data.get("resume_text", ""),
+                data.get("cover_template", ""),
             ),
         )
 
@@ -106,7 +126,8 @@ def list_jobs(db_path: Path) -> list[dict]:
     with _conn(db_path) as con:
         rows = con.execute(
             "SELECT id, folder, company, title, location, url, "
-            "created_at, match_percentage, has_pdf, resume_source "
+            "created_at, match_percentage, has_pdf, resume_source, "
+            "(tailored_resume != '') AS has_tailored "
             "FROM jobs ORDER BY id DESC"
         ).fetchall()
     return [dict(r) for r in rows]

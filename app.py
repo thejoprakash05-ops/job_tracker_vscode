@@ -666,6 +666,214 @@ def analyze():
         return jsonify({"error": f"{type(e).__name__}: {e}", "detail": tb}), 500
 
 
+def _extract_and_score(
+    url: str = "",
+    manual_jd: str = "",
+    company_override: str = "",
+    title_override: str = "",
+    resume_text: str = "",
+    cover_template: str = "",
+) -> dict:
+    """Extract the JD and score the match against the original resume —
+    no tailoring yet. Tailoring/cover-letter generation is a separate,
+    on-demand step (see _generate_tailored) so jobs the user never revisits
+    don't cost those API calls."""
+    sid = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
+    _trace_header(sid, "Single Job Analysis (score only)")
+
+    client = get_client()
+
+    if not resume_text.strip():
+        resume_text = BASE_RESUME
+        resume_source = "base"
+    else:
+        resume_source = "uploaded"
+
+    _trace(sid, "Request", "IN",
+           url=url or "(none)",
+           manual_jd=manual_jd or "(none)",
+           company_override=company_override or "(none)",
+           title_override=title_override or "(none)",
+           resume_source=resume_source)
+
+    jd_data: dict = {}
+    if url:
+        try:
+            raw = fetch_page_text(url)
+            if len(raw) < 200:
+                raise ValueError("Page returned too little text")
+            _trace(sid, "Fetch Page", "IN", url=url, raw_len=len(raw))
+            jd_data = extract_jd(raw, url, client)
+        except Exception as fetch_err:
+            if manual_jd:
+                jd_data = {
+                    "company": company_override or "Unknown",
+                    "title":   title_override   or "Unknown",
+                    "location": "",
+                    "job_description": manual_jd,
+                }
+            else:
+                raise RuntimeError(
+                    f"Could not fetch the job page ({fetch_err}). "
+                    "Please paste the job description manually and try again."
+                ) from fetch_err
+    elif manual_jd:
+        jd_data = {
+            "company": company_override or "Unknown",
+            "title":   title_override   or "Unknown",
+            "location": "",
+            "job_description": manual_jd,
+        }
+    else:
+        raise ValueError("Please provide a URL or paste the job description.")
+
+    if company_override:
+        jd_data["company"] = company_override
+    if title_override:
+        jd_data["title"] = title_override
+
+    company = jd_data.get("company", "Unknown")
+    title   = jd_data.get("title",   "Unknown")
+    jd_text = jd_data.get("job_description", "")
+
+    _trace(sid, "JD Extraction", "OUT",
+           company=company, title=title,
+           location=jd_data.get("location", ""),
+           jd_chars=len(jd_text),
+           jd_preview=jd_text)
+
+    _trace(sid, "Match Analysis", "IN", jd_preview=jd_text, resume_preview=resume_text)
+    analysis = analyze_match(jd_text, resume_text, client)
+    _trace(sid, "Match Analysis", "OUT",
+           match_pct=analysis.get("match_percentage"),
+           matched=analysis.get("matched_skills"),
+           missing=analysis.get("missing_skills"),
+           strengths=analysis.get("strengths"),
+           gaps=analysis.get("gaps"),
+           summary=analysis.get("summary"))
+
+    folder  = safe_folder(company, title)
+    job_dir = JOBS_DIR / folder
+    job_dir.mkdir(exist_ok=True)
+
+    source_line = f"[{url}]({url})" if url else "Manual entry"
+    jd_md = (
+        f"# {title} at {company}\n\n"
+        f"**Source:** {source_line}\n"
+        f"**Location:** {jd_data.get('location', '')}\n\n"
+        "---\n\n"
+        f"{jd_text}"
+    )
+
+    (job_dir / "job_description.md").write_text(jd_md, encoding="utf-8")
+
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    db.upsert_job(DB_PATH, {
+        "folder":           folder,
+        "company":          company,
+        "title":            title,
+        "location":         jd_data.get("location", ""),
+        "url":              url,
+        "created_at":       created_at,
+        "match_percentage": analysis.get("match_percentage", 0),
+        "has_pdf":          False,
+        "resume_source":    resume_source,
+        "analysis":         analysis,
+        "tailored_resume":  "",
+        "cover_letter":     "",
+        "job_description":  jd_md,
+        "resume_text":      resume_text if resume_source == "uploaded" else "",
+        "cover_template":   cover_template,
+    })
+
+    _trace(sid, "Save", "OUT", folder=folder, db="saved")
+    return {
+        "success":         True,
+        "folder":          folder,
+        "company":         company,
+        "title":           title,
+        "location":        jd_data.get("location", ""),
+        "analysis":        analysis,
+        "tailored_resume": "",
+        "cover_letter":    "",
+        "job_description": jd_text,
+        "has_pdf":         False,
+        "has_tailored":    False,
+        "resume_source":   resume_source,
+    }
+
+
+def _generate_tailored(folder: str) -> dict:
+    """On-demand step: tailor the resume and write a cover letter for a
+    previously-scored job. Triggered by the "Generate tailored resume"
+    button rather than running automatically on every analysis."""
+    row = db.get_job(DB_PATH, folder)
+    if row is None:
+        raise ValueError(f"Job '{folder}' not found.")
+
+    client = get_client()
+    sid = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
+    _trace_header(sid, "Generate Tailored Resume")
+
+    company = row["company"]
+    title   = row["title"]
+    jd_md   = row["job_description"]
+    jd_text = jd_md.split("---\n\n", 1)[-1] if "---\n\n" in jd_md else jd_md
+
+    resume_source  = row.get("resume_source", "base")
+    resume_text    = row.get("resume_text") if resume_source == "uploaded" else ""
+    if not resume_text or not resume_text.strip():
+        resume_text = BASE_RESUME
+    cover_template = row.get("cover_template", "")
+
+    _trace(sid, "Tailor Resume", "IN", company=company, title=title, resume_chars=len(resume_text))
+    tailored = tailor_resume(resume_text, jd_text, company, title, client)
+    _trace(sid, "Tailor Resume", "OUT", tailored_chars=len(tailored), preview=tailored)
+
+    _trace(sid, "Cover Letter", "IN", company=company, title=title)
+    cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
+    _trace(sid, "Cover Letter", "OUT", cover_chars=len(cover), preview=cover)
+
+    job_dir = JOBS_DIR / folder
+    job_dir.mkdir(exist_ok=True)
+    (job_dir / "tailored_resume.md").write_text(tailored, encoding="utf-8")
+    (job_dir / "cover_letter.md").write_text(cover, encoding="utf-8")
+
+    db.upsert_job(DB_PATH, {
+        "folder":           folder,
+        "company":          company,
+        "title":            title,
+        "location":         row.get("location", ""),
+        "url":              row.get("url", ""),
+        "created_at":       row.get("created_at", ""),
+        "match_percentage": row.get("match_percentage", 0),
+        "has_pdf":          False,
+        "resume_source":    resume_source,
+        "analysis":         row.get("analysis", {}),
+        "tailored_resume":  tailored,
+        "cover_letter":     cover,
+        "job_description":  jd_md,
+        "resume_text":      row.get("resume_text", ""),
+        "cover_template":   cover_template,
+    })
+
+    _trace(sid, "Save", "OUT", folder=folder, db="saved")
+    return {
+        "success":         True,
+        "folder":          folder,
+        "company":         company,
+        "title":           title,
+        "location":        row.get("location", ""),
+        "analysis":        row.get("analysis", {}),
+        "tailored_resume": tailored,
+        "cover_letter":    cover,
+        "job_description": jd_text,
+        "has_pdf":         False,
+        "has_tailored":    True,
+        "resume_source":   resume_source,
+    }
+
+
 def _run_analysis(
     url: str = "",
     manual_jd: str = "",
@@ -825,7 +1033,7 @@ def _do_analyze():
     cover_template  = read_uploaded_text(request.files.get("cover_template_file"))
 
     try:
-        result = _run_analysis(
+        result = _extract_and_score(
             url=url,
             manual_jd=manual_jd,
             company_override=company_override,
@@ -837,6 +1045,20 @@ def _do_analyze():
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        return jsonify({"error": str(e), "detail": tb}), 500
+
+
+@app.route("/jobs/<folder>/generate-tailored", methods=["POST"])
+def generate_tailored(folder: str):
+    try:
+        result = _generate_tailored(folder)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
@@ -859,6 +1081,7 @@ def job_data(folder: str):
         "cover_letter":    row["cover_letter"],
         "job_description": row["job_description"],
         "has_pdf":         bool(row["has_pdf"]),
+        "has_tailored":    bool(row["tailored_resume"]),
         "resume_source":   row.get("resume_source", "base"),
     })
 

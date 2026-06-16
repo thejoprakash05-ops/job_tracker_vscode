@@ -613,6 +613,11 @@ textarea { resize: vertical; min-height: 140px; }
   font-weight: 700;
 }
 .link-pdf:hover { background: var(--primary); color: #fff; }
+.btn-generate-tailored {
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
 
 .empty-state {
   color: var(--muted);
