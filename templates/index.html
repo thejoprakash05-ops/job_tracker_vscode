@@ -25,6 +25,7 @@
       <span>Job Application Optimizer</span>
     </a>
     <span class="header-sub">Powered by Claude AI</span>
+    <a href="/companies" class="theme-toggle" style="text-decoration:none" title="View all companies explored">&#127970; Companies</a>
     <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark theme">
       <span id="themeIcon">☀</span> <span id="themeLabel">Light</span>
     </button>
@@ -193,7 +194,6 @@
       <div class="tab-pane active" id="tab-resume">
         <div class="pane-actions">
           <button class="btn-pdf"       id="dlResumePdf">&#8615; PDF</button>
-          <button class="btn-secondary" id="dlResumeMd">&#8615; Markdown</button>
           <button class="btn-secondary" id="copyResume">&#10697; Copy</button>
         </div>
         <div class="markdown-body" id="resumePreview"></div>
@@ -203,7 +203,6 @@
       <div class="tab-pane" id="tab-cover">
         <div class="pane-actions">
           <button class="btn-pdf"       id="dlCoverPdf">&#8615; PDF</button>
-          <button class="btn-secondary" id="dlCoverMd">&#8615; Markdown</button>
           <button class="btn-secondary" id="copyCover">&#10697; Copy</button>
         </div>
         <div class="markdown-body" id="coverPreview"></div>
@@ -213,6 +212,7 @@
       <div class="tab-pane" id="tab-jd">
         <div class="markdown-body" id="jdPreview"></div>
       </div>
+      <p class="doc-generated-at" id="docGeneratedAt"></p>
     </div>
 
   </section>
@@ -326,13 +326,12 @@
         </div>
         <div class="job-card-links">
           {% if job.has_tailored %}
-            {% if job.has_pdf %}
             <a href="/jobs/{{ job.folder }}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
             <a href="/jobs/{{ job.folder }}/download/cover_letter.pdf" class="link-dl link-pdf">Cover PDF</a>
-            {% else %}
-            <a href="/jobs/{{ job.folder }}/download/tailored_resume.md" class="link-dl">Resume</a>
-            <a href="/jobs/{{ job.folder }}/download/cover_letter.md" class="link-dl">Cover Letter</a>
-            {% endif %}
+            <button class="link-dl btn-regenerate" data-folder="{{ job.folder }}"
+                    onclick="event.stopPropagation(); generateTailored('{{ job.folder }}', this);">
+              &#8635; Regenerate <span class="cost-hint">~$0.05</span>
+            </button>
           {% else %}
             <button class="link-dl btn-generate-tailored" data-folder="{{ job.folder }}"
                     onclick="event.stopPropagation(); generateTailored('{{ job.folder }}', this);">
@@ -638,20 +637,18 @@ function renderResults(data) {
     document.getElementById("resumePreview").innerHTML = marked.parse(rawResume);
     document.getElementById("coverPreview").innerHTML  = marked.parse(rawCover);
 
-    const hasPdf = !!data.has_pdf;
     document.getElementById("dlResumePdf").onclick = () =>
       window.location.href = `/jobs/${currentFolder}/download/tailored_resume.pdf`;
-    document.getElementById("dlResumeMd").onclick  = () =>
-      window.location.href = `/jobs/${currentFolder}/download/tailored_resume.md`;
     document.getElementById("dlCoverPdf").onclick  = () =>
       window.location.href = `/jobs/${currentFolder}/download/cover_letter.pdf`;
-    document.getElementById("dlCoverMd").onclick   = () =>
-      window.location.href = `/jobs/${currentFolder}/download/cover_letter.md`;
-    document.getElementById("dlResumePdf").style.display = hasPdf ? "" : "none";
-    document.getElementById("dlCoverPdf").style.display  = hasPdf ? "" : "none";
 
     document.getElementById("copyResume").onclick = () => copyToClipboard(rawResume, "copyResume");
     document.getElementById("copyCover").onclick   = () => copyToClipboard(rawCover,  "copyCover");
+
+    const genAt = data.tailored_at || "";
+    const genEl = document.getElementById("docGeneratedAt");
+    genEl.textContent = genAt ? `Generated ${genAt}` : "";
+    genEl.style.display = genAt ? "" : "none";
   } else {
     resumePane.querySelector(".pane-actions").classList.add("hidden");
     coverPane.querySelector(".pane-actions").classList.add("hidden");
@@ -664,6 +661,9 @@ function renderResults(data) {
       </button>`;
     document.getElementById("resumePreview").innerHTML = cta;
     document.getElementById("coverPreview").innerHTML  = cta;
+    const genElNo = document.getElementById("docGeneratedAt");
+    genElNo.textContent = "";
+    genElNo.style.display = "none";
   }
 
   // Resume source chip
@@ -756,11 +756,11 @@ function refreshHistory(data) {
     </div>
     <div class="job-card-links">
       ${data.has_tailored
-        ? (data.has_pdf
-            ? `<a href="/jobs/${data.folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
-               <a href="/jobs/${data.folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>`
-            : `<a href="/jobs/${data.folder}/download/tailored_resume.md" class="link-dl">Resume</a>
-               <a href="/jobs/${data.folder}/download/cover_letter.md"    class="link-dl">Cover Letter</a>`)
+        ? `<a href="/jobs/${data.folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+           <a href="/jobs/${data.folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>
+           <button class="link-dl btn-regenerate" onclick="event.stopPropagation(); generateTailored('${data.folder}', this);">
+             &#8635; Regenerate <span class="cost-hint">~$0.05</span>
+           </button>`
         : `<button class="link-dl btn-generate-tailored" data-folder="${data.folder}"
                    onclick="event.stopPropagation(); generateTailored('${data.folder}', this);">
              &#10024; Generate tailored resume
@@ -848,15 +848,18 @@ async function generateTailored(folder, btnEl) {
       return;
     }
 
-    // Update the job card's links (swap the "Generate" button for download links)
+    // Update the job card's links (swap Generate/Regenerate button for PDF links + new Regenerate)
     const card = document.querySelector(`.job-card[data-folder="${folder}"]`);
     if (card) {
       const links = card.querySelector(".job-card-links");
-      const genBtn = links && links.querySelector(".btn-generate-tailored");
+      const genBtn = links && (links.querySelector(".btn-generate-tailored") || links.querySelector(".btn-regenerate"));
       if (genBtn) {
         genBtn.outerHTML = `
-          <a href="/jobs/${folder}/download/tailored_resume.md" class="link-dl">Resume</a>
-          <a href="/jobs/${folder}/download/cover_letter.md"    class="link-dl">Cover Letter</a>`;
+          <a href="/jobs/${folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+          <a href="/jobs/${folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>
+          <button class="link-dl btn-regenerate" onclick="event.stopPropagation(); generateTailored('${folder}', this);">
+            &#8635; Regenerate <span class="cost-hint">~$0.05</span>
+          </button>`;
       }
     }
 
@@ -1146,9 +1149,9 @@ function addAdzunaResultCard(result) {
     : `<span class="az-low-badge">Score only (&lt; 50%)</span>`;
 
   const links = full
-    ? `<a href="/jobs/${result.folder}/download/tailored_resume.md" class="link-dl">Resume</a>
-       <a href="/jobs/${result.folder}/download/cover_letter.md" class="link-dl">Cover</a>
-       <a href="/jobs/${result.folder}/download/job_description.md" class="link-dl">JD</a>`
+    ? `<a href="/jobs/${result.folder}/download/tailored_resume.pdf" class="link-dl link-pdf">Resume PDF</a>
+       <a href="/jobs/${result.folder}/download/cover_letter.pdf"    class="link-dl link-pdf">Cover PDF</a>
+       <a href="/jobs/${result.folder}/download/job_description.md"  class="link-dl">JD</a>`
     : `<a href="/jobs/${result.folder}/download/job_description.md" class="link-dl">JD</a>`;
 
   card.innerHTML = `

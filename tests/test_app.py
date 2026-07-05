@@ -12,6 +12,8 @@ TestJobDatabase        database jobs table: insert, update, list order, JSON rou
 TestRulesParsing       rules.md section split (resume vs cover-letter)
 TestLinkedInRoutes     Flask /linkedin/saved-jobs and /linkedin/probe-endpoints
 TestSkillBuilderRoute  Flask /skill-builder/content: cache hit, missing param
+TestGeneratePdf        generate_pdf: file created, en/em-dash encoding, multi-section
+TestGenerateTailored   _generate_tailored: has_pdf set, PDFs written, DB updated
 """
 
 import json
@@ -506,3 +508,153 @@ class TestSkillBuilderRoute:
         r = client.get("/skill-builder/content?skill=python&refresh=1")
         # 500 from get_client() proves cached path was skipped
         assert r.status_code == 500
+
+
+# ===========================================================================
+# PDF generation
+# ===========================================================================
+
+pytest.importorskip("fpdf", reason="fpdf2 not installed")
+
+
+class TestGeneratePdf:
+
+    def test_creates_pdf_file(self, tmp_path):
+        out = tmp_path / "resume.pdf"
+        result = _app.generate_pdf("# Thejo Prakash\n\n## Experience\n\n- Built things\n", out)
+        assert result is True
+        assert out.exists()
+        assert out.stat().st_size > 0
+
+    def test_en_dash_does_not_produce_question_mark(self, tmp_path):
+        out = tmp_path / "resume.pdf"
+        _app.generate_pdf("Staff Engineer – Acme Corp\n", out)
+        # PDF bytes must not contain lone '?' where the dash was
+        # We verify by checking the raw bytes don't contain b'?' at all
+        # (a clean run produces no replacement characters)
+        raw = out.read_bytes()
+        assert b"?" not in raw
+
+    def test_em_dash_does_not_produce_question_mark(self, tmp_path):
+        out = tmp_path / "resume.pdf"
+        _app.generate_pdf("Role — Company\n", out)
+        raw = out.read_bytes()
+        assert b"?" not in raw
+
+    def test_curly_quotes_do_not_produce_question_mark(self, tmp_path):
+        out = tmp_path / "resume.pdf"
+        _app.generate_pdf("“Leader” and ‘contributor’\n", out)
+        raw = out.read_bytes()
+        assert b"?" not in raw
+
+    def test_multi_section_resume_produces_file(self, tmp_path):
+        md = (
+            "# Jane Doe\n\n"
+            "## Experience\n\n"
+            "### Senior Engineer – 2020–2024\n\n"
+            "- **Led** platform migration\n"
+            "- Reduced latency by 40%\n\n"
+            "## Education\n\n"
+            "B.Tech — IIT Kharagpur\n"
+        )
+        out = tmp_path / "full.pdf"
+        assert _app.generate_pdf(md, out) is True
+        assert out.stat().st_size > 500
+
+
+# ===========================================================================
+# _generate_tailored — PDF written and has_pdf set in DB
+# ===========================================================================
+
+class TestGenerateTailored:
+
+    @pytest.fixture()
+    def db_path(self, tmp_path):
+        p = tmp_path / "jobs.db"
+        db.init_db(p)
+        return p
+
+    def _seed_job(self, db_path, folder="acme_engineer"):
+        db.upsert_job(db_path, {
+            "folder": folder, "company": "Acme", "title": "Engineer",
+            "location": "Remote", "url": "https://acme.com/job",
+            "created_at": "2026-06-20", "match_percentage": 80,
+            "has_pdf": False, "resume_source": "base",
+            "analysis": {}, "tailored_resume": "", "cover_letter": "",
+            "job_description": "---\n\nBuild great things.",
+            "resume_text": "# My Resume\n", "cover_template": "",
+        })
+        return folder
+
+    def test_generate_tailored_sets_has_pdf_true(self, tmp_path, monkeypatch, db_path):
+        folder = self._seed_job(db_path)
+        monkeypatch.setattr(_app, "DB_PATH", db_path)
+        monkeypatch.setattr(_app, "JOBS_DIR", tmp_path)
+        monkeypatch.setattr(_app, "BASE_RESUME", "# Base Resume\n")
+        monkeypatch.setattr(_app, "tailor_resume",    lambda *a, **kw: "# Tailored\n")
+        monkeypatch.setattr(_app, "write_cover_letter", lambda *a, **kw: "Dear Hiring Manager,\n")
+        monkeypatch.setattr(_app, "get_client", lambda: MagicMock())
+
+        result = _app._generate_tailored(folder)
+
+        assert result["has_pdf"] is True
+        assert db.get_job(db_path, folder)["has_pdf"] == 1
+
+    def test_generate_tailored_creates_pdf_files(self, tmp_path, monkeypatch, db_path):
+        pytest.importorskip("fpdf")
+        folder = self._seed_job(db_path)
+        monkeypatch.setattr(_app, "DB_PATH", db_path)
+        monkeypatch.setattr(_app, "JOBS_DIR", tmp_path)
+        monkeypatch.setattr(_app, "BASE_RESUME", "# Base Resume\n")
+        monkeypatch.setattr(_app, "tailor_resume",    lambda *a, **kw: "# Tailored Resume\n\n## Skills\n\n- Python\n")
+        monkeypatch.setattr(_app, "write_cover_letter", lambda *a, **kw: "Dear Hiring Manager,\n\nI am interested.\n")
+        monkeypatch.setattr(_app, "get_client", lambda: MagicMock())
+
+        _app._generate_tailored(folder)
+
+        job_dir = tmp_path / folder
+        assert (job_dir / "tailored_resume.pdf").exists()
+        assert (job_dir / "cover_letter.pdf").exists()
+
+    def test_generate_tailored_sets_tailored_at_timestamp(self, tmp_path, monkeypatch, db_path):
+        folder = self._seed_job(db_path)
+        monkeypatch.setattr(_app, "DB_PATH", db_path)
+        monkeypatch.setattr(_app, "JOBS_DIR", tmp_path)
+        monkeypatch.setattr(_app, "BASE_RESUME", "# Base Resume\n")
+        monkeypatch.setattr(_app, "tailor_resume",      lambda *a, **kw: "# Tailored\n")
+        monkeypatch.setattr(_app, "write_cover_letter", lambda *a, **kw: "Dear Hiring Manager,\n")
+        monkeypatch.setattr(_app, "get_client", lambda: MagicMock())
+
+        result = _app._generate_tailored(folder)
+
+        assert re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", result["tailored_at"])
+        assert db.get_job(db_path, folder)["tailored_at"] == result["tailored_at"]
+
+    def test_generate_tailored_removes_stale_md_files(self, tmp_path, monkeypatch, db_path):
+        pytest.importorskip("fpdf")
+        folder = self._seed_job(db_path)
+        job_dir = tmp_path / folder
+        job_dir.mkdir(parents=True, exist_ok=True)
+        # Pre-create stale .md files
+        (job_dir / "tailored_resume.md").write_text("old resume", encoding="utf-8")
+        (job_dir / "cover_letter.md").write_text("old cover", encoding="utf-8")
+
+        monkeypatch.setattr(_app, "DB_PATH", db_path)
+        monkeypatch.setattr(_app, "JOBS_DIR", tmp_path)
+        monkeypatch.setattr(_app, "BASE_RESUME", "# Base Resume\n")
+        monkeypatch.setattr(_app, "tailor_resume",      lambda *a, **kw: "# Tailored\n")
+        monkeypatch.setattr(_app, "write_cover_letter", lambda *a, **kw: "Dear Hiring Manager,\n")
+        monkeypatch.setattr(_app, "get_client", lambda: MagicMock())
+
+        _app._generate_tailored(folder)
+
+        assert not (job_dir / "tailored_resume.md").exists()
+        assert not (job_dir / "cover_letter.md").exists()
+
+    def test_generate_tailored_unknown_folder_raises(self, tmp_path, monkeypatch, db_path):
+        monkeypatch.setattr(_app, "DB_PATH", db_path)
+        monkeypatch.setattr(_app, "JOBS_DIR", tmp_path)
+        monkeypatch.setattr(_app, "get_client", lambda: MagicMock())
+
+        with pytest.raises(ValueError, match="not found"):
+            _app._generate_tailored("nonexistent_folder")

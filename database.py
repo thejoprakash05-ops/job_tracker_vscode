@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS skill_cache (
     cached_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS companies (
+    name       TEXT PRIMARY KEY,
+    industry   TEXT NOT NULL DEFAULT '',
+    first_seen TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     folder          TEXT    NOT NULL UNIQUE,
@@ -31,7 +37,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     cover_letter    TEXT             DEFAULT '',
     job_description TEXT             DEFAULT '',
     resume_text     TEXT             DEFAULT '',
-    cover_template  TEXT             DEFAULT ''
+    cover_template  TEXT             DEFAULT '',
+    tailored_at     TEXT             DEFAULT ''
 );
 """
 
@@ -41,7 +48,43 @@ CREATE TABLE IF NOT EXISTS jobs (
 _ADDED_COLUMNS = [
     ("jobs", "resume_text",    "TEXT DEFAULT ''"),
     ("jobs", "cover_template", "TEXT DEFAULT ''"),
+    ("jobs", "tailored_at",    "TEXT DEFAULT ''"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Company industry classification
+# ---------------------------------------------------------------------------
+
+# Best-effort mapping for companies we recognize. Anything not listed here
+# falls into "Other" rather than being guessed at.
+_INDUSTRY_MAP = {
+    "anthropic":              "AI / Foundation Models",
+    "openai":                 "AI / Foundation Models",
+    "google":                 "Big Tech / Internet",
+    "youtube (google)":       "Big Tech / Internet",
+    "amazon":                 "Big Tech / Internet",
+    "meta":                   "Big Tech / Internet",
+    "microsoft":              "Big Tech / Internet",
+    "apple":                  "Big Tech / Internet",
+    "zoox":                   "Autonomous Vehicles",
+    "tesla":                  "Autonomous Vehicles",
+    "etched":                 "AI Hardware / Silicon",
+    "nvidia":                 "Semiconductor / Hardware",
+    "amd":                    "Semiconductor / Hardware",
+    "intel":                  "Semiconductor / Hardware",
+    "samsung semiconductor":  "Semiconductor / Hardware",
+    "tenstorrent":            "Semiconductor / Hardware",
+    "applied materials":      "Semiconductor / Hardware",
+    "qualcomm":               "Semiconductor / Hardware",
+    "broadcom":               "Semiconductor / Hardware",
+    "walmart":                "Retail / E-commerce",
+    "target":                 "Retail / E-commerce",
+}
+
+
+def classify_industry(company: str) -> str:
+    return _INDUSTRY_MAP.get(company.strip().lower(), "Other")
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +118,53 @@ def init_db(db_path: Path) -> None:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+    # Backfill the companies table from any jobs rows that predate it, so
+    # upgrading an existing DB doesn't lose companies already explored.
+    with _conn(db_path) as con:
+        rows = con.execute(
+            "SELECT DISTINCT company FROM jobs WHERE company != '' AND company != 'Unknown'"
+        ).fetchall()
+    for r in rows:
+        record_company(db_path, r[0])
+
+
+def record_company(db_path: Path, name: str) -> None:
+    """Record a company as explored. Persists independently of the jobs
+    table so it survives job deletions."""
+    from datetime import datetime
+    name = (name or "").strip()
+    if not name or name.lower() == "unknown":
+        return
+    industry = classify_industry(name)
+    with _conn(db_path) as con:
+        con.execute(
+            """
+            INSERT INTO companies (name, industry, first_seen) VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                industry = CASE WHEN companies.industry = '' THEN excluded.industry ELSE companies.industry END
+            """,
+            (name, industry, datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+
+
+def add_company(db_path: Path, name: str, industry: str = "") -> None:
+    """Manually add/re-categorize a company. Unlike record_company, this
+    always applies the given industry (or an auto-classified one if left
+    blank), since it reflects a deliberate user choice."""
+    from datetime import datetime
+    name = (name or "").strip()
+    if not name:
+        return
+    industry = (industry or "").strip() or classify_industry(name)
+    with _conn(db_path) as con:
+        con.execute(
+            """
+            INSERT INTO companies (name, industry, first_seen) VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET industry = excluded.industry
+            """,
+            (name, industry, datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+
 
 def upsert_job(db_path: Path, data: dict) -> None:
     with _conn(db_path) as con:
@@ -84,8 +174,8 @@ def upsert_job(db_path: Path, data: dict) -> None:
                 (folder, company, title, location, url, created_at,
                  match_percentage, has_pdf, resume_source,
                  analysis, tailored_resume, cover_letter, job_description,
-                 resume_text, cover_template)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 resume_text, cover_template, tailored_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(folder) DO UPDATE SET
                 company          = excluded.company,
                 title            = excluded.title,
@@ -100,7 +190,10 @@ def upsert_job(db_path: Path, data: dict) -> None:
                 cover_letter     = excluded.cover_letter,
                 job_description  = excluded.job_description,
                 resume_text      = excluded.resume_text,
-                cover_template   = excluded.cover_template
+                cover_template   = excluded.cover_template,
+                tailored_at      = CASE WHEN excluded.tailored_at != ''
+                                        THEN excluded.tailored_at
+                                        ELSE tailored_at END
             """,
             (
                 data["folder"],
@@ -118,8 +211,10 @@ def upsert_job(db_path: Path, data: dict) -> None:
                 data.get("job_description", ""),
                 data.get("resume_text", ""),
                 data.get("cover_template", ""),
+                data.get("tailored_at", ""),
             ),
         )
+    record_company(db_path, data.get("company", ""))
 
 
 def list_jobs(db_path: Path) -> list[dict]:
@@ -127,10 +222,32 @@ def list_jobs(db_path: Path) -> list[dict]:
         rows = con.execute(
             "SELECT id, folder, company, title, location, url, "
             "created_at, match_percentage, has_pdf, resume_source, "
-            "(tailored_resume != '') AS has_tailored "
+            "((tailored_resume != '') OR (cover_letter != '')) AS has_tailored "
             "FROM jobs ORDER BY id DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_companies(db_path: Path) -> list[str]:
+    """All companies ever explored, alphabetically. Persists even after the
+    jobs that surfaced them are deleted."""
+    with _conn(db_path) as con:
+        rows = con.execute(
+            "SELECT name FROM companies ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def list_companies_by_industry(db_path: Path) -> dict[str, list[str]]:
+    """Companies ever explored, grouped by industry. 'Other' sorts last."""
+    with _conn(db_path) as con:
+        rows = con.execute(
+            "SELECT name, industry FROM companies ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    groups: dict[str, list[str]] = {}
+    for r in rows:
+        groups.setdefault(r["industry"] or "Other", []).append(r["name"])
+    return dict(sorted(groups.items(), key=lambda kv: (kv[0] == "Other", kv[0])))
 
 
 def get_job(db_path: Path, folder: str) -> dict | None:

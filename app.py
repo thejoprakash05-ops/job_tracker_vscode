@@ -79,7 +79,39 @@ DB_PATH = JOBS_DIR / "jobs2.db"
 db.init_db(DB_PATH)
 db.migrate_from_files(JOBS_DIR, DB_PATH)
 
+# Delete tailored_resume.md / cover_letter.md wherever a PDF already exists —
+# keeps each job folder to the single canonical PDF per document type.
+_STALE_MD = ("tailored_resume.md", "cover_letter.md")
+for _jdir in JOBS_DIR.iterdir():
+    if not _jdir.is_dir():
+        continue
+    for _md in _STALE_MD:
+        _pdf = _jdir / _md.replace(".md", ".pdf")
+        _mdp = _jdir / _md
+        if _pdf.exists() and _mdp.exists():
+            _mdp.unlink()
+
 BASE_RESUME = (BASE_DIR / "base_resume_2.md").read_text(encoding="utf-8")
+
+CONFIG_PATH = BASE_DIR / "config.json"
+
+def load_config() -> dict:
+    defaults = {
+        "generate_resume":       True,
+        "generate_cover_letter": True,
+        "base_resume_file":      "base_resume_2.md",
+    }
+    if not CONFIG_PATH.exists():
+        return defaults
+    try:
+        return {**defaults, **json.loads(CONFIG_PATH.read_text(encoding="utf-8"))}
+    except Exception:
+        return defaults
+
+def get_base_resume() -> str:
+    cfg = load_config()
+    p = BASE_DIR / cfg["base_resume_file"]
+    return p.read_text(encoding="utf-8") if p.exists() else BASE_RESUME
 
 _rules_path = BASE_DIR / "rules.md"
 if _rules_path.exists():
@@ -115,6 +147,15 @@ def generate_pdf(md_text: str, output_path: Path) -> bool:
         from fpdf import FPDF
 
         def _safe(s: str) -> str:
+            # Substitute Unicode typographic characters not in latin-1 before encoding
+            for src, dst in (
+                ('–', '-'), ('—', '-'),  # en/em dash
+                ('‘', "'"), ('’', "'"),   # curly single quotes
+                ('“', '"'), ('”', '"'),   # curly double quotes
+                ('•', '-'), ('·', '-'),   # bullet / middle dot
+                ('…', '...'),                  # ellipsis
+            ):
+                s = s.replace(src, dst)
             return s.encode("latin-1", errors="replace").decode("latin-1")
 
         def _strip_inline(s: str) -> str:
@@ -684,7 +725,7 @@ def _extract_and_score(
     client = get_client()
 
     if not resume_text.strip():
-        resume_text = BASE_RESUME
+        resume_text = get_base_resume()
         resume_source = "base"
     else:
         resume_source = "uploaded"
@@ -823,22 +864,38 @@ def _generate_tailored(folder: str) -> dict:
     resume_source  = row.get("resume_source", "base")
     resume_text    = row.get("resume_text") if resume_source == "uploaded" else ""
     if not resume_text or not resume_text.strip():
-        resume_text = BASE_RESUME
+        resume_text = get_base_resume()
     cover_template = row.get("cover_template", "")
 
-    _trace(sid, "Tailor Resume", "IN", company=company, title=title, resume_chars=len(resume_text))
-    tailored = tailor_resume(resume_text, jd_text, company, title, client)
-    _trace(sid, "Tailor Resume", "OUT", tailored_chars=len(tailored), preview=tailored)
+    cfg = load_config()
 
-    _trace(sid, "Cover Letter", "IN", company=company, title=title)
-    cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
-    _trace(sid, "Cover Letter", "OUT", cover_chars=len(cover), preview=cover)
+    # Preserve existing content for whichever documents are disabled
+    tailored = row.get("tailored_resume", "")
+    if cfg["generate_resume"]:
+        _trace(sid, "Tailor Resume", "IN", company=company, title=title, resume_chars=len(resume_text))
+        tailored = tailor_resume(resume_text, jd_text, company, title, client)
+        _trace(sid, "Tailor Resume", "OUT", tailored_chars=len(tailored), preview=tailored)
+    else:
+        _trace(sid, "Tailor Resume", "SKIP", reason="generate_resume=false in config.json")
+
+    cover = row.get("cover_letter", "")
+    if cfg["generate_cover_letter"]:
+        _trace(sid, "Cover Letter", "IN", company=company, title=title)
+        cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
+        _trace(sid, "Cover Letter", "OUT", cover_chars=len(cover), preview=cover)
+    else:
+        _trace(sid, "Cover Letter", "SKIP", reason="generate_cover_letter=false in config.json")
 
     job_dir = JOBS_DIR / folder
     job_dir.mkdir(exist_ok=True)
-    (job_dir / "tailored_resume.md").write_text(tailored, encoding="utf-8")
-    (job_dir / "cover_letter.md").write_text(cover, encoding="utf-8")
+    if cfg["generate_resume"] and tailored:
+        generate_pdf(tailored, job_dir / "tailored_resume.pdf")
+    if cfg["generate_cover_letter"] and cover:
+        generate_pdf(cover, job_dir / "cover_letter.pdf")
+    for _stale in ("tailored_resume.md", "cover_letter.md"):
+        (job_dir / _stale).unlink(missing_ok=True)
 
+    tailored_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     db.upsert_job(DB_PATH, {
         "folder":           folder,
         "company":          company,
@@ -847,7 +904,7 @@ def _generate_tailored(folder: str) -> dict:
         "url":              row.get("url", ""),
         "created_at":       row.get("created_at", ""),
         "match_percentage": row.get("match_percentage", 0),
-        "has_pdf":          False,
+        "has_pdf":          True,
         "resume_source":    resume_source,
         "analysis":         row.get("analysis", {}),
         "tailored_resume":  tailored,
@@ -855,6 +912,7 @@ def _generate_tailored(folder: str) -> dict:
         "job_description":  jd_md,
         "resume_text":      row.get("resume_text", ""),
         "cover_template":   cover_template,
+        "tailored_at":      tailored_at,
     })
 
     _trace(sid, "Save", "OUT", folder=folder, db="saved")
@@ -868,9 +926,10 @@ def _generate_tailored(folder: str) -> dict:
         "tailored_resume": tailored,
         "cover_letter":    cover,
         "job_description": jd_text,
-        "has_pdf":         False,
+        "has_pdf":         True,
         "has_tailored":    True,
         "resume_source":   resume_source,
+        "tailored_at":     tailored_at,
     }
 
 
@@ -889,7 +948,7 @@ def _run_analysis(
     client = get_client()
 
     if not resume_text.strip():
-        resume_text = BASE_RESUME
+        resume_text = get_base_resume()
         resume_source = "base"
     else:
         resume_source = "uploaded"
@@ -947,19 +1006,30 @@ def _run_analysis(
            jd_chars=len(jd_text),
            jd_preview=jd_text)
 
-    _trace(sid, "Tailor Resume", "IN",
-           company=company, title=title,
-           resume_chars=len(resume_text),
-           jd_preview=jd_text)
-    tailored = tailor_resume(resume_text, jd_text, company, title, client)
-    _trace(sid, "Tailor Resume", "OUT", tailored_chars=len(tailored), preview=tailored)
+    cfg = load_config()
 
-    _trace(sid, "Cover Letter", "IN", company=company, title=title)
-    cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
-    _trace(sid, "Cover Letter", "OUT", cover_chars=len(cover), preview=cover)
+    tailored = ""
+    if cfg["generate_resume"]:
+        _trace(sid, "Tailor Resume", "IN",
+               company=company, title=title,
+               resume_chars=len(resume_text),
+               jd_preview=jd_text)
+        tailored = tailor_resume(resume_text, jd_text, company, title, client)
+        _trace(sid, "Tailor Resume", "OUT", tailored_chars=len(tailored), preview=tailored)
+    else:
+        _trace(sid, "Tailor Resume", "SKIP", reason="generate_resume=false in config.json")
 
-    _trace(sid, "Match Analysis", "IN", jd_preview=jd_text, resume_preview=tailored)
-    analysis = analyze_match(jd_text, tailored, client)
+    cover = ""
+    if cfg["generate_cover_letter"]:
+        _trace(sid, "Cover Letter", "IN", company=company, title=title)
+        cover = write_cover_letter(resume_text, jd_text, company, title, client, cover_template)
+        _trace(sid, "Cover Letter", "OUT", cover_chars=len(cover), preview=cover)
+    else:
+        _trace(sid, "Cover Letter", "SKIP", reason="generate_cover_letter=false in config.json")
+
+    match_source = tailored if tailored else resume_text
+    _trace(sid, "Match Analysis", "IN", jd_preview=jd_text, resume_preview=match_source)
+    analysis = analyze_match(jd_text, match_source, client)
     _trace(sid, "Match Analysis", "OUT",
            match_pct=analysis.get("match_percentage"),
            matched=analysis.get("matched_skills"),
@@ -982,12 +1052,17 @@ def _run_analysis(
     )
 
     print(f"[analyze] saving files for {company} / {title}")
-    (job_dir / "job_description.md").write_text(jd_md,    encoding="utf-8")
-    (job_dir / "tailored_resume.md").write_text(tailored, encoding="utf-8")
-    (job_dir / "cover_letter.md").write_text(cover,       encoding="utf-8")
+    (job_dir / "job_description.md").write_text(jd_md, encoding="utf-8")
+    if cfg["generate_resume"] and tailored:
+        generate_pdf(tailored, job_dir / "tailored_resume.pdf")
+    if cfg["generate_cover_letter"] and cover:
+        generate_pdf(cover, job_dir / "cover_letter.pdf")
+    for _stale in ("tailored_resume.md", "cover_letter.md"):
+        (job_dir / _stale).unlink(missing_ok=True)
 
     print("[analyze] writing to database")
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    created_at  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    tailored_at = created_at
     db.upsert_job(DB_PATH, {
         "folder":           folder,
         "company":          company,
@@ -996,7 +1071,8 @@ def _run_analysis(
         "url":              url,
         "created_at":       created_at,
         "match_percentage": analysis.get("match_percentage", 0),
-        "has_pdf":          False,
+        "has_pdf":          True,
+        "tailored_at":      tailored_at,
         "resume_source":    resume_source,
         "analysis":         analysis,
         "tailored_resume":  tailored,
@@ -1017,6 +1093,7 @@ def _run_analysis(
         "job_description": jd_text,
         "has_pdf":         True,
         "resume_source":   resume_source,
+        "tailored_at":     tailored_at,
     }
 
 
@@ -1081,8 +1158,9 @@ def job_data(folder: str):
         "cover_letter":    row["cover_letter"],
         "job_description": row["job_description"],
         "has_pdf":         bool(row["has_pdf"]),
-        "has_tailored":    bool(row["tailored_resume"]),
+        "has_tailored":    bool(row["tailored_resume"] or row["cover_letter"]),
         "resume_source":   row.get("resume_source", "base"),
+        "tailored_at":     row.get("tailored_at", ""),
     })
 
 
@@ -1399,7 +1477,7 @@ def adzuna_start_batch():
     company     = data.get("company", "").strip()
     days        = int(data.get("days", 7))
     location    = data.get("location", "").strip()
-    resume_text = data.get("resume_text", "").strip() or BASE_RESUME
+    resume_text = data.get("resume_text", "").strip() or get_base_resume()
 
     if not titles:
         return jsonify({"error": "No titles provided."}), 400
@@ -1581,6 +1659,24 @@ def adzuna_batch_stream(batch_id: str):
 def skill_builder():
     skill = request.args.get("skill", "").strip()
     return render_template("skill_builder.html", skill=skill)
+
+
+@app.route("/companies")
+def companies():
+    grouped = db.list_companies_by_industry(DB_PATH)
+    total = sum(len(v) for v in grouped.values())
+    return render_template("companies.html", grouped=grouped, total=total)
+
+
+@app.route("/companies/add", methods=["POST"])
+def add_company():
+    data = request.get_json(force=True, silent=True) or {}
+    name = data.get("name", "").strip()
+    industry = data.get("industry", "").strip()
+    if not name:
+        return jsonify({"error": "Company name is required"}), 400
+    db.add_company(DB_PATH, name, industry)
+    return jsonify({"success": True})
 
 
 @app.route("/skill-builder/content")

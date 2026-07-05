@@ -1,0 +1,5 @@
+{
+  "generate_resume":       false,
+  "generate_cover_letter": true,
+  "base_resume_file":      "base_resume_2.md"
+}

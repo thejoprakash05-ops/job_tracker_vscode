@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Companies Explored</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script>
+    (function() {
+      document.documentElement.setAttribute(
+        'data-theme', localStorage.getItem('theme') || 'dark'
+      );
+    })();
+  </script>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <a href="/" class="logo" style="text-decoration:none">
+      <img src="/static/favicon.svg" alt="" class="logo-icon" />
+      <span>Job Application Optimizer</span>
+    </a>
+    <span class="header-sub">Companies Explored &mdash; Powered by Claude AI</span>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark theme">
+      <span id="themeIcon">☀</span> <span id="themeLabel">Light</span>
+    </button>
+  </div>
+</header>
+
+<main class="sb-main">
+
+  <div class="sb-hero">
+    <a href="/" class="sb-back">&#8592; Back to Optimizer</a>
+    <h1 class="sb-title">Companies Explored <span class="sb-skill">({{ total }})</span></h1>
+    <p class="sb-subtitle">Every company you've ever analyzed a job for, grouped by industry. This list is permanent &mdash; it stays even after you delete the underlying applications. Click a company to open its careers page.</p>
+  </div>
+
+  <div class="card" style="padding:1.25rem 1.5rem">
+    <h3 style="margin-bottom:.75rem;font-size:1rem">Add a company</h3>
+    <form id="newCompanyForm" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+      <input type="text" id="newCompanyName" placeholder="Company name" style="max-width:220px" required />
+      <input type="text" id="newCompanyIndustry" placeholder="Category (leave blank for auto)" list="industryList" style="max-width:240px" />
+      <datalist id="industryList">
+        {% for industry in grouped.keys() %}<option value="{{ industry }}"></option>{% endfor %}
+      </datalist>
+      <button type="submit" class="btn-primary" style="padding:.5rem 1.25rem">+ Add Company</button>
+    </form>
+    <div id="newCompanyError" class="error-banner hidden" style="margin-top:.75rem"></div>
+  </div>
+
+  <div id="sections">
+  {% if grouped %}
+    {% for industry, names in grouped.items() %}
+    <div class="resource-section" data-industry="{{ industry }}">
+      <h2 class="section-title"><span class="section-icon">&#127970;</span> {{ industry }} <span class="hint">({{ names|length }})</span></h2>
+      <div class="tag-list">
+        {% for name in names %}
+        <a class="tag tag-green" style="font-size:.85rem;padding:.35rem .85rem;text-decoration:none"
+           href="https://www.google.com/search?q={{ (name + ' careers') | urlencode }}"
+           target="_blank" rel="noopener" title="Search for {{ name }}'s careers page">{{ name }}</a>
+        {% endfor %}
+      </div>
+      <form class="add-company-form" data-industry="{{ industry }}" style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center">
+        <input type="text" class="add-company-input" placeholder="Add company to {{ industry }}…" style="max-width:220px;padding:.4rem .7rem;font-size:.85rem" />
+        <button type="submit" class="btn-secondary" style="padding:.3rem .8rem;font-size:.8rem">+ Add</button>
+      </form>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty-state">No companies explored yet. Analyze a job posting to get started.</p>
+  {% endif %}
+  </div>
+
+</main>
+
+<script>
+function _applyThemeUI() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.getElementById('themeIcon').textContent  = isDark ? '☀' : '☾';
+  document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  _applyThemeUI();
+}
+document.addEventListener('DOMContentLoaded', _applyThemeUI);
+
+async function submitCompany(name, industry, errEl) {
+  errEl.classList.add('hidden');
+  try {
+    const res = await fetch('/companies/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, industry }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+    window.location.reload();
+  } catch (err) {
+    errEl.textContent = 'Failed to add company: ' + err.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+document.getElementById('newCompanyForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name     = document.getElementById('newCompanyName').value.trim();
+  const industry = document.getElementById('newCompanyIndustry').value.trim();
+  if (!name) return;
+  submitCompany(name, industry, document.getElementById('newCompanyError'));
+});
+
+document.querySelectorAll('.add-company-form').forEach(form => {
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = form.querySelector('.add-company-input');
+    const name  = input.value.trim();
+    if (!name) return;
+    submitCompany(name, form.dataset.industry, document.getElementById('newCompanyError'));
+  });
+});
+</script>
+</body>
+</html>

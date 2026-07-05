@@ -8,7 +8,7 @@ https://www.linkedin.com/in/thejoprakash
 ## Technical Skills
 
 - **Programming Languages:** C, C++, Java, Python, PHP, Tcl
-- **Machine Learning & AI:** Applied Machine Learning, Deep Learning, Sequence Models, Agentic AI, Embeddings, Vector Databases
+- **Machine Learning & AI:** Applied ML, Deep Learning, Sequence Models, Agentic AI, Embeddings, Vector Databases
 - **ML Frameworks:** Scikit-learn, TensorFlow, PyTorch, FAISS
 - **Algorithms & Theory:** Data Structures, Algorithms, Combinatorial Optimization, Graph Algorithms
 - **Hardware & Architecture:** ASIC, FPGA, CPU Architecture, SoC Design
@@ -21,10 +21,10 @@ https://www.linkedin.com/in/thejoprakash
 
 ### Executive Director, R&D | Synopsys Inc. | Oct 2022 – Present
 
-- **Strategic Product Leadership:** Spearheading HAPS ProtoCompiler R&D strategy to accelerate performance and time-to-market; delivered critical performance and bring-up optimizations that solidified Synopsys as a leader in hardware-assisted verification.
-- **AI First Culture:** Established an "AI First" engineering culture, implementing best practices for prompt engineering and context management that improved feature development cycles by 30%.
-- **Organizational Management:** Directing a high-impact organization of engineers and managers, fostering a culture of technical excellence to maximize FPGA Synthesis Quality of Results (QoR) and overall system throughput.
-- **Cross-Functional Orchestration:** Partnering with AMD and internal PNR (Place and Route) leadership to architect placement-aware synthesis flows, directly improving silicon realization and hardware performance metrics.
+- **Strategic Product Leadership:** Spearheading HAPS ProtoCompiler R&D strategy to accelerate performance and time-to-market; delivered critical performance and bring-up optimizations that solidified Synopsys as a leader. Directing improvements to incident maangement and self-healing system development which helped improve customer experience.
+- **AI First Culture, AI marketplace and ML:** Established an "AI First" engineering culture, implementing best practices for context engineering that improved feature development cycles by 30%. Use Machine Learning to predict and resolve routing congestion, timing correlation, agentic workflow optimization. Lead the team to add MCP servers, skills and agents to marketplace.
+- **Organizational Management, Experimentation, QoR:** Directing a high-impact organization of engineers and managers, fostering a culture of technical excellence by directing experimentation framework, maximize FPGA Synthesis Quality of Results (QoR) and overall system throughput.
+- **Cross-Functional Orchestration, IP Protection and data retention:** Partnering with AMD and internal PNR (Place and Route) leadership to architect placement-aware synthesis flows, directly improving silicon realization and hardware performance metrics. Preserving IP Protection through the flow and guardrailing customer date retenion
 - **Enterprise-Wide Influence:** Championing cross-functional initiatives across Product Validation, DevOps, and AE teams; exercising influence over a 100+ engineer ecosystem to align technical roadmaps with business objectives.
 - **Executive Stakeholder & Customer Engagement:** Driving strategic customer engagements and roadmap negotiations with Tier-1 semiconductor clients and C-suite management to secure long-term design wins.
 
@@ -32,9 +32,8 @@ https://www.linkedin.com/in/thejoprakash
 
 - **Strategic Site Leadership:** Served as the Bangalore Site Lead for the Protium software organization, exercising end-to-end accountability for the ML platform, timing performance, and enterprise-grade scalability.
 - **Organizational Building & Culture:** Founded and scaled a high-performance R&D organization from the ground up, recruiting and mentoring a 20-member engineering team while fostering a culture of technical excellence and rapid delivery.
-- **Technical Execution & Scalability:** Directed technical strategy and execution for a 50+ engineer ecosystem, successfully re-architecting systems to significantly boost overall system speed and throughput.
+- **Technical Execution & Scalability:** Directed technical strategy and execution for a 50+ engineer ecosystem, successfully re-architecting systems to significantly boost overall system speed and throughput. Use Machine Learning to predict and resolve routing congestion, achievable performance and compile time prediction, workflow optimization.
 - **Revenue Growth & Product Innovation:** Spearheaded the integration of Machine Learning into core products (6+ production models), yielding a 10X revenue increase and accelerating customer adoption through 3–4X improvements in FPGA PNR time.
-- **Executive & Stakeholder Management:** Orchestrated high-level roadmap negotiations and strategic engagements with Tier-1 customers and corporate executive leadership to align product evolution with market demand.
 
 ### Software Engineer / Project Lead | Facebook Inc., Menlo Park, USA | Oct 2015 – Jul 2018
 
@@ -64,7 +63,7 @@ https://www.linkedin.com/in/thejoprakash
 - Implemented infrastructure to benchmark the results; the framework is used for daily results generation.
 
 ### Staff R&D Engineer | Synplicity/Synopsys Inc., Sunnyvale, USA | May 2001 – Jan 2011
-- ICC Design Planning (Tech Lead): Worked with customers and AEs to demonstrate 2X improvement in runtime and 3X improvement in quality.
+- ICC Design Planning (Tech Lead): Worked with customers and AEs to demonstrate 2X improvement in runtime and 3X improvement in Physical Design, Timing closure, Floorplanning, etc.
 - Logic synthesis support for new Altera/Actel newer devices.
 
 ### Software Engineer | Motorola India, Bangalore, India | Feb 2000 – May 2001

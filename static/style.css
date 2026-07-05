@@ -618,6 +618,23 @@ textarea { resize: vertical; min-height: 140px; }
   font-family: inherit;
   cursor: pointer;
 }
+.btn-regenerate {
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  color: var(--muted);
+  border-color: var(--border);
+}
+.btn-regenerate:hover { background: var(--muted); color: #fff; border-color: var(--muted); }
+.cost-hint { font-size: .7rem; opacity: .75; }
+.doc-generated-at {
+  font-size: .75rem;
+  color: var(--muted);
+  text-align: right;
+  padding: .4rem 1rem .5rem;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
 
 .empty-state {
   color: var(--muted);

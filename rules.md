@@ -12,7 +12,9 @@ These rules are applied every time the resume is tailored for a job. Follow them
 
 5. **Filter Technical Skills to job-relevant ones only**: The base resume contains the full set of skills across all categories. For each tailored resume, include only the skill categories and individual skills that are relevant to the target role. Omit categories entirely if none of their skills apply. Never invent skills not present in the base resume.
 
-6. **Adapt the current Synopsys job title based on the seniority of the target role**:
+6. **Move Technical Skills before Education for semiconductor companies**: When the target company is a semiconductor / chip / memory company (e.g., Micron, Sandisk, Western Digital, Samsung Semiconductor, SK Hynix, Qualcomm, Broadcom, NVIDIA, AMD, Intel, Marvell, or any company whose primary business is chip design or fabrication rather than EDA/CAD software), place the Technical Skills section immediately before Education — after all work experience sections — instead of at the top of the resume.
+
+7. **Adapt the current Synopsys job title based on the seniority of the target role**:
    - If the target role is Director level or above (e.g., Director, Senior Director, VP, SVP, C-suite), use the title **Senior Software Engineering Director** for the current Synopsys position.
    - If the target role is Manager or Senior Manager level, use the title **Software Engineering Director** for the current Synopsys position.
    - Keep all other details of the Synopsys role (company name, dates, bullets) exactly as written.
