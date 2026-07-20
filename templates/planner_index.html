@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Application Planner</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script>
+    (function() {
+      document.documentElement.setAttribute(
+        'data-theme', localStorage.getItem('theme') || 'dark'
+      );
+    })();
+  </script>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <a href="/" class="logo" style="text-decoration:none">
+      <img src="/static/favicon.svg" alt="" class="logo-icon" />
+      <span>Job Application Optimizer</span>
+    </a>
+    <span class="header-sub">Application Planner &mdash; Powered by Claude AI</span>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark theme">
+      <span id="themeIcon">☀</span> <span id="themeLabel">Light</span>
+    </button>
+  </div>
+</header>
+
+<main class="sb-main">
+
+  <div class="sb-hero">
+    <a href="/" class="sb-back">&#8592; Back to Optimizer</a>
+    <h1 class="sb-title">Application Planner</h1>
+    <p class="sb-subtitle">
+      {{ total_companies }} companies across software and hardware roles, {{ per_day }} per day.
+      Come back each day, work through that day's list, and check off each company as you apply.
+    </p>
+  </div>
+
+  {% if not created %}
+  <div class="card">
+    <h2 class="card-title">Create your plan</h2>
+    <p class="card-sub">
+      Generates a {{ (total_companies / per_day) | round(0, 'ceil') | int }}-day plan covering big tech,
+      semiconductor/hardware, aerospace/defense/automotive, quant trading &amp; fintech, and
+      Illinois-region recruiters &mdash; a good fit for a UIUC Computer Engineering senior open to
+      software and/or hardware roles.
+    </p>
+    <button id="createBtn" class="btn-primary">Create My Plan</button>
+    <div id="createError" class="error-banner hidden" style="margin-top:.75rem"></div>
+  </div>
+  {% else %}
+  <div class="jobs-grid">
+    {% for d in overview %}
+    <a href="/planner/day/{{ d.day }}" class="job-card" style="text-decoration:none;color:inherit">
+      <div class="job-card-score
+        {% if d.applied == d.total %} score-high
+        {% elif d.applied > 0 %} score-mid
+        {% else %} score-low{% endif %}">
+        {{ d.applied }}/{{ d.total }}
+      </div>
+      <div class="job-card-info">
+        <p class="job-card-title">Day {{ d.day }}</p>
+        <p class="job-card-company">{{ d.total }} companies to apply to</p>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  <p class="hint" style="margin-top:1rem">
+    Want a fresh list? <button class="btn-link" id="regenBtn">Regenerate plan</button>
+    <span class="hint">(this clears your applied checkmarks)</span>
+  </p>
+  <div id="createError" class="error-banner hidden" style="margin-top:.75rem"></div>
+  {% endif %}
+
+</main>
+
+<script>
+function _applyThemeUI() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.getElementById('themeIcon').textContent  = isDark ? '☀' : '☾';
+  document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  _applyThemeUI();
+}
+document.addEventListener('DOMContentLoaded', _applyThemeUI);
+
+async function createPlan(force) {
+  const errEl = document.getElementById('createError');
+  errEl.classList.add('hidden');
+  try {
+    const res = await fetch('/planner/create' + (force ? '?force=1' : ''), { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+    window.location.reload();
+  } catch (err) {
+    errEl.textContent = 'Failed to create plan: ' + err.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+const createBtn = document.getElementById('createBtn');
+if (createBtn) createBtn.addEventListener('click', () => createPlan(false));
+
+const regenBtn = document.getElementById('regenBtn');
+if (regenBtn) regenBtn.addEventListener('click', () => {
+  if (confirm('Regenerate the plan? This clears your applied checkmarks.')) createPlan(true);
+});
+</script>
+</body>
+</html>

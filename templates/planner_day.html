@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Planner &mdash; Day {{ day }}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script>
+    (function() {
+      document.documentElement.setAttribute(
+        'data-theme', localStorage.getItem('theme') || 'dark'
+      );
+    })();
+  </script>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <a href="/" class="logo" style="text-decoration:none">
+      <img src="/static/favicon.svg" alt="" class="logo-icon" />
+      <span>Job Application Optimizer</span>
+    </a>
+    <span class="header-sub">Application Planner &mdash; Powered by Claude AI</span>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="Toggle light / dark theme">
+      <span id="themeIcon">☀</span> <span id="themeLabel">Light</span>
+    </button>
+  </div>
+</header>
+
+<main class="sb-main">
+
+  <div class="sb-hero">
+    <a href="/planner" class="sb-back">&#8592; Back to Planner</a>
+    <h1 class="sb-title">Day {{ day }} <span class="sb-skill" id="progressLabel">({{ applied_count }}/{{ total }} applied)</span></h1>
+    <p class="sb-subtitle">Open each career page, apply, then check it off. Your progress is saved.</p>
+  </div>
+
+  <div style="display:flex;gap:.75rem;margin-bottom:.5rem">
+    {% if day > 1 %}<a href="/planner/day/{{ day - 1 }}" class="btn-secondary" style="text-decoration:none">&#8592; Day {{ day - 1 }}</a>{% endif %}
+    {% if day < total_days %}<a href="/planner/day/{{ day + 1 }}" class="btn-secondary" style="text-decoration:none">Day {{ day + 1 }} &#8594;</a>{% endif %}
+  </div>
+
+  <div class="resource-grid">
+    {% for c in companies %}
+    <div class="resource-card course-card" data-company="{{ c.company }}">
+      <div class="card-header">
+        <h3 class="card-title">{{ c.company }}</h3>
+      </div>
+      <p class="meta-tag">{{ c.industry }}</p>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.25rem">
+        <a href="{{ c.career_url }}" target="_blank" rel="noopener" class="card-link">Career Page</a>
+        <a href="{{ c.linkedin_url }}" target="_blank" rel="noopener" class="card-link card-link-secondary">LinkedIn Jobs</a>
+      </div>
+      <label style="margin-top:.5rem;display:flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer">
+        <input type="checkbox" class="planner-applied-cb" {% if c.applied %}checked{% endif %} />
+        Applied{% if c.applied_at %} <span class="hint">&mdash; {{ c.applied_at }}</span>{% endif %}
+      </label>
+    </div>
+    {% endfor %}
+  </div>
+
+</main>
+
+<script>
+function _applyThemeUI() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.getElementById('themeIcon').textContent  = isDark ? '☀' : '☾';
+  document.getElementById('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  _applyThemeUI();
+}
+document.addEventListener('DOMContentLoaded', _applyThemeUI);
+
+function updateProgressLabel() {
+  const total   = document.querySelectorAll('.planner-applied-cb').length;
+  const applied = document.querySelectorAll('.planner-applied-cb:checked').length;
+  document.getElementById('progressLabel').textContent = `(${applied}/${total} applied)`;
+}
+
+document.querySelectorAll('.planner-applied-cb').forEach(cb => {
+  cb.addEventListener('change', async (e) => {
+    const card    = e.target.closest('.resource-card');
+    const company = card.dataset.company;
+    const applied = e.target.checked;
+    e.target.disabled = true;
+    try {
+      const res = await fetch('/planner/mark', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company, applied }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      updateProgressLabel();
+    } catch (err) {
+      e.target.checked = !applied;
+      alert('Failed to save: ' + err.message);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+});
+</script>
+</body>
+</html>

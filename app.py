@@ -17,10 +17,11 @@ from pathlib import Path
 import anthropic
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, Response, render_template, request, jsonify, send_from_directory, abort, stream_with_context
+from flask import Flask, Response, render_template, request, jsonify, send_from_directory, abort, stream_with_context, redirect, url_for
 from dotenv import load_dotenv
 
 import database as db
+from planner_data import PLANNER_COMPANIES
 
 load_dotenv()
 
@@ -1676,6 +1677,52 @@ def add_company():
     if not name:
         return jsonify({"error": "Company name is required"}), 400
     db.add_company(DB_PATH, name, industry)
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Application planner — a curated, day-by-day list of target companies
+# ---------------------------------------------------------------------------
+
+PLANNER_PER_DAY = 20
+
+
+@app.route("/planner")
+def planner():
+    created = db.planner_is_created(DB_PATH)
+    overview = db.get_planner_overview(DB_PATH) if created else []
+    return render_template("planner_index.html", created=created, overview=overview,
+                           total_companies=len(PLANNER_COMPANIES), per_day=PLANNER_PER_DAY)
+
+
+@app.route("/planner/create", methods=["POST"])
+def planner_create():
+    data = request.get_json(force=True, silent=True) or {}
+    force = bool(data.get("force")) or request.args.get("force", "") == "1"
+    days = db.create_planner(DB_PATH, PLANNER_COMPANIES, per_day=PLANNER_PER_DAY, force=force)
+    return jsonify({"success": True, "days": days, "total": len(PLANNER_COMPANIES)})
+
+
+@app.route("/planner/day/<int:day>")
+def planner_day(day):
+    total_days = db.get_planner_days(DB_PATH)
+    if total_days == 0:
+        return redirect(url_for("planner"))
+    day = max(1, min(day, total_days))
+    companies = db.get_planner_day(DB_PATH, day)
+    applied_count = sum(1 for c in companies if c["applied"])
+    return render_template("planner_day.html", day=day, total_days=total_days,
+                           companies=companies, applied_count=applied_count,
+                           total=len(companies))
+
+
+@app.route("/planner/mark", methods=["POST"])
+def planner_mark():
+    data = request.get_json(force=True, silent=True) or {}
+    company = data.get("company", "").strip()
+    if not company:
+        return jsonify({"error": "Company is required"}), 400
+    db.set_planner_applied(DB_PATH, company, bool(data.get("applied")))
     return jsonify({"success": True})
 
 

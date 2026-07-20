@@ -21,6 +21,17 @@ CREATE TABLE IF NOT EXISTS companies (
     first_seen TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS planner (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    day          INTEGER NOT NULL,
+    company      TEXT    NOT NULL UNIQUE,
+    industry     TEXT             DEFAULT '',
+    career_url   TEXT             DEFAULT '',
+    linkedin_url TEXT             DEFAULT '',
+    applied      INTEGER          DEFAULT 0,
+    applied_at   TEXT             DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     folder          TEXT    NOT NULL UNIQUE,
@@ -248,6 +259,73 @@ def list_companies_by_industry(db_path: Path) -> dict[str, list[str]]:
     for r in rows:
         groups.setdefault(r["industry"] or "Other", []).append(r["name"])
     return dict(sorted(groups.items(), key=lambda kv: (kv[0] == "Other", kv[0])))
+
+
+# ---------------------------------------------------------------------------
+# Application planner (curated companies, N per day, applied-tracking)
+# ---------------------------------------------------------------------------
+
+def planner_is_created(db_path: Path) -> bool:
+    with _conn(db_path) as con:
+        row = con.execute("SELECT COUNT(*) FROM planner").fetchone()
+    return bool(row[0])
+
+
+def create_planner(db_path: Path, companies: list[dict], per_day: int = 20, force: bool = False) -> int:
+    """Populate the planner from a curated company list, chunked into
+    `per_day`-sized days. Idempotent unless force=True (which wipes any
+    applied-tracking progress along with the old list)."""
+    with _conn(db_path) as con:
+        if force:
+            con.execute("DELETE FROM planner")
+        elif con.execute("SELECT COUNT(*) FROM planner").fetchone()[0] > 0:
+            return con.execute("SELECT COALESCE(MAX(day), 0) FROM planner").fetchone()[0]
+        for i, c in enumerate(companies):
+            day = (i // per_day) + 1
+            con.execute(
+                """
+                INSERT INTO planner (day, company, industry, career_url, linkedin_url)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(company) DO NOTHING
+                """,
+                (day, c["name"], c.get("industry", ""), c.get("career_url", ""), c.get("linkedin_url", "")),
+            )
+    return (len(companies) + per_day - 1) // per_day
+
+
+def get_planner_days(db_path: Path) -> int:
+    with _conn(db_path) as con:
+        row = con.execute("SELECT COALESCE(MAX(day), 0) FROM planner").fetchone()
+    return row[0]
+
+
+def get_planner_day(db_path: Path, day: int) -> list[dict]:
+    with _conn(db_path) as con:
+        rows = con.execute(
+            "SELECT id, day, company, industry, career_url, linkedin_url, applied, applied_at "
+            "FROM planner WHERE day = ? ORDER BY id",
+            (day,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_planner_overview(db_path: Path) -> list[dict]:
+    with _conn(db_path) as con:
+        rows = con.execute(
+            "SELECT day, COUNT(*) AS total, SUM(applied) AS applied "
+            "FROM planner GROUP BY day ORDER BY day"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_planner_applied(db_path: Path, company: str, applied: bool) -> None:
+    from datetime import datetime
+    applied_at = datetime.now().strftime("%Y-%m-%d %H:%M") if applied else ""
+    with _conn(db_path) as con:
+        con.execute(
+            "UPDATE planner SET applied = ?, applied_at = ? WHERE company = ?",
+            (1 if applied else 0, applied_at, company),
+        )
 
 
 def get_job(db_path: Path, folder: str) -> dict | None:
